@@ -31,13 +31,23 @@ def test_term_bank_entry_shape_for_ba():
     assert entry[6] == ord("場")     # sequence = code point
 
 
-def test_term_detail_has_no_percentages_or_totalwords():
+def test_term_detail_has_no_totalwords_and_only_truthful_percentages():
     r = rec("場.json")
     entry = bk.build_term_entry(r)
     blob = json.dumps(entry, ensure_ascii=False)
-    assert "%" not in blob
+    # No Jiten totalWords key or its raw counts may ever leak into an entry.
     assert "totalWords" not in blob and "total_words" not in blob
     assert "2904" not in blob and "2083" not in blob  # the totalWords values
+    # Percentages that DO appear are the truthful reading-distribution donut,
+    # computed over the shown examples -- each segment count is small and real,
+    # never a totalWords-derived statistic. Verify every donut percent matches
+    # the honest recomputation from the entry's own examples.
+    dist = bk.reading_distribution(r)
+    shown = sum(len(g["words"]) for g in r["examples"])
+    assert sum(s["count"] for s in dist["segments"]) == shown
+    assert sum(s["percent"] for s in dist["segments"]) == 100 if shown else True
+    for seg in dist["segments"]:
+        assert f"{seg['percent']}% ({seg['count']})" in blob
 
 
 def test_kanji_bank_entry_shape_for_ba():

@@ -718,8 +718,15 @@ def _ruby_node(segments):
     return content
 
 
-def _detail_content(record):
-    """Build the structured-content body for a term entry's detail item."""
+def _detail_content(record, enrichment=None):
+    """Build the structured-content body for a term entry's detail item.
+
+    `enrichment` (optional) adds visual learning aids: a reading-distribution
+    donut computed from the shown examples, plus a keyboard-accessible
+    progressive-disclosure section carrying the phonetic family and stroke-order
+    diagram. Without it the body is exactly the honest legacy content.
+    """
+    char = record["character"]
     body = []
 
     # Readings line: honest On / Kun lists as supplied.
@@ -749,6 +756,11 @@ def _detail_content(record):
     if facts:
         body.append({"tag": "div", "content": " · ".join(facts)})
 
+    # Reading-distribution donut: truthful percentages over the shown examples.
+    donut = build_donut_node(record)
+    if donut is not None:
+        body.append(donut)
+
     # Example words grouped by reading with honest On/Kun/Other labels.
     for group in record["examples"]:
         items = []
@@ -759,15 +771,41 @@ def _detail_content(record):
             body.append({"tag": "div", "content": group["label"]})
             body.append({"tag": "ul", "content": items})
 
-    return body
+    # Learning aids fold into a keyboard-accessible progressive-disclosure
+    # section so the core entry stays compact. Only added when enrichment data
+    # actually exists for this character (never an empty, misleading section).
+    if enrichment:
+        aids = []
+        fam = (enrichment.get("families_by_char") or {}).get(char)
+        phon_node = build_phonetic_family_node(char, fam)
+        if phon_node is not None:
+            aids.append(phon_node)
+        stroke_info = (enrichment.get("strokes") or {}).get(char)
+        stroke_node = build_stroke_node(char, stroke_info)
+        if stroke_node is not None:
+            aids.append(stroke_node)
+        if aids:
+            body.append({
+                "tag": "details",
+                "data": {"beeRole": "section"},
+                "content": [
+                    {"tag": "summary", "content": "Learning aids"},
+                    {"tag": "div", "data": {"beeRole": "aids"}, "content": aids},
+                ],
+            })
+
+    return [{"tag": "div", "data": {"beeRole": "detail"}, "content": body}]
 
 
-def build_term_entry(record):
-    """Build one Yomitan term-bank entry for a normalized kanji record."""
+def build_term_entry(record, enrichment=None):
+    """Build one Yomitan term-bank entry for a normalized kanji record.
+
+    `enrichment` (optional) threads the visual learning aids into the detail.
+    """
     keyword = record["keyword"] or record["character"]
     glossary = [
         keyword,
-        {"type": "structured-content", "content": _detail_content(record)},
+        {"type": "structured-content", "content": _detail_content(record, enrichment)},
     ]
     return [
         record["character"],   # expression
@@ -839,12 +877,14 @@ def build_alias_term_entry(alias, canonical):
     ]
 
 
-def build_banks(records, aliases=None):
+def build_banks(records, aliases=None, enrichment=None):
     """Assemble the four Yomitan banks from normalized records + term aliases.
 
     Records are sorted deterministically by Unicode code point. Aliases (old
-    form -> canonical form) contribute only term-bank entries. Returns a dict
-    with term_bank, term_meta_bank, kanji_bank, kanji_meta_bank.
+    form -> canonical form) contribute only term-bank entries. `enrichment`
+    (optional) threads visual learning aids into the term entries only -- the
+    kanji/meta/frequency banks are untouched, so no percentage or totalWords
+    statistic can leak into them. Returns a dict with the four banks.
     """
     aliases = aliases or {}
     ordered = sorted(records, key=lambda r: ord(r["character"]))
@@ -855,7 +895,7 @@ def build_banks(records, aliases=None):
     kanji_meta_bank = []
 
     for r in ordered:
-        term_bank.append(build_term_entry(r))
+        term_bank.append(build_term_entry(r, enrichment))
         tm = build_term_meta(r)
         if tm is not None:
             term_meta_bank.append(tm)
