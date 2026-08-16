@@ -1,0 +1,10 @@
+{
+  "name": "bees-ultimate-kanji-dictionary-tools",
+  "private": true,
+  "type": "module",
+  "description": "Build/validation tooling for Bee's Ultimate Kanji Dictionary",
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "ajv": "^8.17.1"
+  }
+}

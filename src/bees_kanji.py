@@ -647,3 +647,172 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
         tmp.replace(path)
         out[char] = payload
     return out
+
+
+# --- Build pipeline and revision decision ------------------------------------
+
+def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji):
+    """Fetch (via cache) -> normalize -> build banks + ZIP for the given date.
+
+    Returns {records, banks, content_hash, zip_bytes(unrevised placeholder)}.
+    The ZIP here uses a placeholder revision; the caller stamps the final
+    revision after the change decision. content_hash is revision-independent.
+    """
+    payloads = fetch_all(characters, cache_dir, date, fetcher)
+    records = []
+    for char in characters:
+        payload = payloads.get(char)
+        if payload is None:
+            continue
+        try:
+            records.append(normalize_record(payload))
+        except MalformedPayload:
+            continue  # skip characters whose payload cannot be trusted
+    banks = build_banks(records, aliases or {})
+    chash = content_hash(banks)
+    return {
+        "records": records,
+        "banks": banks,
+        "content_hash": chash,
+        "zip_bytes": build_zip(banks, date_to_revision(date)),
+    }
+
+
+def date_to_revision(date):
+    """Convert a UTC date 'YYYY-MM-DD' to a dot-numeric revision 'YYYY.MM.DD'."""
+    return date.replace("-", ".")
+
+
+def decide_revision(content_hash, previous_hash, date, previous_revision):
+    """Decide the revision string, or None when content is unchanged.
+
+    - unchanged content -> None (publish nothing)
+    - changed, new day   -> that day's 'YYYY.MM.DD'
+    - changed, same base day as previous revision -> append a monotonic
+      dot-numeric suffix so the revision strictly increases
+    """
+    if previous_hash is not None and content_hash == previous_hash:
+        return None
+    base = date_to_revision(date)
+    if previous_revision is None:
+        return base
+    if previous_revision == base or previous_revision.startswith(base + "."):
+        # Same UTC day already released: bump the trailing counter.
+        parts = previous_revision.split(".")
+        if len(parts) == 4:
+            return f"{base}.{int(parts[3]) + 1}"
+        return f"{base}.1"
+    return base
+
+
+def _load_previous(dist_index_path):
+    """Return (previous_revision, previous_content_hash) from dist/index.json.
+
+    The content hash is stored alongside the index as dist/content.sha256 so we
+    can detect changes without re-downloading the released ZIP.
+    """
+    import pathlib as _pl
+
+    idx = _pl.Path(dist_index_path)
+    prev_rev = None
+    if idx.exists():
+        try:
+            prev_rev = json.loads(idx.read_text(encoding="utf-8")).get("revision")
+        except (ValueError, OSError):
+            prev_rev = None
+    prev_hash = None
+    hpath = idx.with_name("content.sha256")
+    if hpath.exists():
+        try:
+            prev_hash = hpath.read_text(encoding="utf-8").strip() or None
+        except OSError:
+            prev_hash = None
+    return prev_rev, prev_hash
+
+
+def main(argv=None):
+    """Single command: fetch/refresh -> normalize -> validate -> build.
+
+    Writes the ZIP + SHA256SUMS to the output dir and refreshes dist/index.json
+    (plus dist/content.sha256) only when normalized content changed.
+    """
+    import argparse
+    import datetime
+    import pathlib as _pl
+    import subprocess
+
+    parser = argparse.ArgumentParser(description="Build Bee's Ultimate Kanji Dictionary")
+    parser.add_argument("--cache", default="cache")
+    parser.add_argument("--out", default="build")
+    parser.add_argument("--dist", default="dist")
+    parser.add_argument("--date", default=None, help="UTC date YYYY-MM-DD (default: today)")
+    parser.add_argument("--limit", type=int, default=None, help="limit characters (debug)")
+    parser.add_argument("--offline", action="store_true", help="use cache only; no network")
+    args = parser.parse_args(argv)
+
+    date = args.date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    out_dir = _pl.Path(args.out)
+    dist_dir = _pl.Path(args.dist)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dist_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[build] date={date}")
+    characters = fetch_sitemap()
+    if args.limit:
+        characters = characters[: args.limit]
+    print(f"[build] {len(characters)} characters from sitemap")
+
+    fetcher = _offline_fetcher(args.cache, date) if args.offline else fetch_kanji
+    result = run_build(characters, args.cache, date, DEFAULT_ALIASES, fetcher)
+    print(f"[build] {len(result['records'])} clean records; hash={result['content_hash'][:12]}")
+
+    prev_rev, prev_hash = _load_previous(dist_dir / "index.json")
+    revision = decide_revision(result["content_hash"], prev_hash, date, prev_rev)
+    if revision is None:
+        print("[build] content unchanged; nothing to publish")
+        return 0
+
+    zip_bytes = build_zip(result["banks"], revision)
+    zip_path = out_dir / ZIP_NAME
+    zip_path.write_bytes(zip_bytes)
+
+    digest = hashlib.sha256(zip_bytes).hexdigest()
+    (out_dir / "SHA256SUMS").write_text(f"{digest}  {ZIP_NAME}\n", encoding="utf-8")
+
+    (dist_dir / "index.json").write_text(
+        dump_json(build_index(revision)) + "\n", encoding="utf-8"
+    )
+    (dist_dir / "content.sha256").write_text(result["content_hash"] + "\n", encoding="utf-8")
+
+    # Validate the built banks against the official schemas via Node.
+    script = _pl.Path(__file__).resolve().parent.parent / "scripts" / "validate_yomitan.mjs"
+    if script.exists():
+        rc = subprocess.call(["node", str(script), str(zip_path)])
+        if rc != 0:
+            raise SystemExit("Yomitan schema validation failed")
+
+    print(f"[build] revision={revision} zip={zip_path} sha256={digest}")
+    return 0
+
+
+def _offline_fetcher(cache_dir, date):
+    """Return a fetcher that only reads the dated cache (raises if missing)."""
+    import pathlib as _pl
+
+    day = _pl.Path(cache_dir) / date
+
+    def fetcher(char):
+        path = day / cache_filename(char)
+        if not path.exists():
+            raise NotFound(char)
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    return fetcher
+
+
+# Compatibility aliases: forms Jiten does not serve, mapped to canonical forms.
+DEFAULT_ALIASES = {"髙": "高"}
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
