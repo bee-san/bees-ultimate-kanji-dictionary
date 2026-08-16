@@ -92,3 +92,24 @@ def test_styles_css_has_accessibility_and_donut_rules():
     assert "prefers-reduced-motion" in css
     assert "data-sc-bee-role" in css       # scopes to our structured content
     assert "donut" in css.lower()
+
+
+def test_styles_css_hover_zoom_is_scoped_hover_only_and_reduced_motion_safe():
+    """Dictionary-content images (stroke diagrams) get a CSS-only hover zoom.
+
+    The effect must be scoped to our own stroke-image marker (never repo badges,
+    README images, icons, or unrelated UI), only apply where hover is supported,
+    scale up on hover, and drop the transition under prefers-reduced-motion.
+    """
+    css = bk.STYLES_CSS
+    # a short transform transition on the dictionary-content image itself
+    assert "transition: transform" in css
+    # hover zoom lives behind an actual hover-capability query, scoped to us
+    hover_block = css[css.index("@media (hover: hover)"):]
+    assert '[data-sc-bee-role="stroke-image"]:hover' in hover_block
+    assert "scale(" in hover_block
+    assert "transform-origin" in css
+    # reduced-motion disables the transform transition for our image
+    rm_block = css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    assert '[data-sc-bee-role="stroke-image"]' in rm_block
+    assert "transition: none" in rm_block
