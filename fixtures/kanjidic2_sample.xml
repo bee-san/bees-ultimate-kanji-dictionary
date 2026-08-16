@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE kanjidic2 [
+]>
+<kanjidic2>
+<header>
+<file_version>4</file_version>
+<database_version>2026-01</database_version>
+<date_of_creation>2026-01-01</date_of_creation>
+</header>
+<character>
+<literal>場</literal>
+<codepoint><cp_value cp_type="ucs">5834</cp_value></codepoint>
+<radical><rad_value rad_type="classical">32</rad_value></radical>
+<misc>
+<grade>2</grade>
+<stroke_count>12</stroke_count>
+<freq>52</freq>
+<jlpt>3</jlpt>
+</misc>
+<reading_meaning>
+<rmgroup>
+<reading r_type="pinyin">chang2</reading>
+<reading r_type="ja_on">ジョウ</reading>
+<reading r_type="ja_on">チョウ</reading>
+<reading r_type="ja_kun">ば</reading>
+<meaning>WRONG-SHOULD-NOT-WIN</meaning>
+<meaning m_lang="fr">lieu</meaning>
+</rmgroup>
+</reading_meaning>
+</character>
+<character>
+<literal>唖</literal>
+<codepoint><cp_value cp_type="ucs">5516</cp_value></codepoint>
+<radical><rad_value rad_type="classical">30</rad_value></radical>
+<misc>
+<stroke_count>10</stroke_count>
+</misc>
+<reading_meaning>
+<rmgroup>
+<reading r_type="pinyin">ya1</reading>
+<reading r_type="ja_on">ア</reading>
+<reading r_type="ja_on">アク</reading>
+<reading r_type="ja_kun">おし</reading>
+<meaning>mute</meaning>
+<meaning>dumb</meaning>
+<meaning m_lang="es">mudo</meaning>
+</rmgroup>
+<nanori>あお</nanori>
+</reading_meaning>
+</character>
+<character>
+<literal>丂</literal>
+<codepoint><cp_value cp_type="ucs">4e02</cp_value></codepoint>
+<radical><rad_value rad_type="classical">1</rad_value></radical>
+<misc>
+<stroke_count>2</stroke_count>
+</misc>
+<reading_meaning>
+<rmgroup>
+<reading r_type="pinyin">kao3</reading>
+<reading r_type="ja_on">コウ</reading>
+<reading r_type="ja_kun">さまた.げられる</reading>
+<meaning>obstruction of breath</meaning>
+<meaning>variant of other characters</meaning>
+</rmgroup>
+</reading_meaning>
+</character>
+<character>
+<literal>everonlyindex</literal>
+<codepoint><cp_value cp_type="ucs">3007</cp_value></codepoint>
+<radical><rad_value rad_type="classical">1</rad_value></radical>
+<misc>
+<stroke_count>1</stroke_count>
+</misc>
+</character>
+<character>
+<literal>丄</literal>
+<codepoint><cp_value cp_type="ucs">4e04</cp_value></codepoint>
+<radical><rad_value rad_type="classical">1</rad_value></radical>
+<misc>
+<stroke_count>2</stroke_count>
+</misc>
+<reading_meaning>
+<rmgroup>
+<reading r_type="pinyin">shang4</reading>
+</rmgroup>
+</reading_meaning>
+</character>
+</kanjidic2>

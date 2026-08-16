@@ -1,6 +1,7 @@
 # Generated working files
 /cache/
 /kanjivg-cache/
+/kanjidic2-cache/
 /build/
 /out/
 *.zip

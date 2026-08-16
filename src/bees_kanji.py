@@ -286,6 +286,136 @@ def normalize_record(payload):
     }
 
 
+# --- KANJIDIC2 simple licensed fallback --------------------------------------
+
+# KANJIDIC2 (EDRDG) is the simple licensed fallback source for characters Jiten
+# does not serve. We use ONLY the fields it plainly provides -- English
+# meanings, Japanese on/kun/nanori readings, stroke count, grade, JLPT -- and
+# never manufacture examples, ranks, percentages, donuts, phonetic families, or
+# Jiten attribution for data Jiten did not provide. Jiten stays authoritative
+# wherever it has a character; KANJIDIC2 only fills genuine gaps.
+
+
+def parse_kanjidic2(xml_text):
+    """Parse a KANJIDIC2 XML document into {character: supported-fields}.
+
+    Extracts only the fields this generator honestly supports:
+      meanings  -- English glosses (<meaning> with no m_lang attribute)
+      on / kun  -- ja_on / ja_kun readings, preserved verbatim
+      nanori    -- name readings (<nanori> under reading_meaning)
+      stroke_count / grade / jlpt -- integer misc fields when present
+
+    Entries are skipped when the <literal> is not a single Unicode scalar, or
+    when the character carries no useful data (no English meaning AND no on/kun
+    reading) -- so no blank/filler records are ever produced. Deterministic:
+    keyed by character; the caller orders by codepoint.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(xml_text)
+    out = {}
+    for char in root.findall("character"):
+        literal = (char.findtext("literal") or "").strip()
+        if len(literal) != 1:
+            continue  # not a single-character kanji
+        rm = char.find("reading_meaning")
+        if rm is None:
+            continue  # pure index entry, nothing to surface
+
+        meanings, on, kun, nanori = [], [], [], []
+        for m in rm.iter("meaning"):
+            if m.get("m_lang") is None:  # English glosses have no m_lang
+                txt = (m.text or "").strip()
+                if txt:
+                    meanings.append(txt)
+        for r in rm.iter("reading"):
+            txt = (r.text or "").strip()
+            if not txt:
+                continue
+            if r.get("r_type") == "ja_on":
+                on.append(txt)
+            elif r.get("r_type") == "ja_kun":
+                kun.append(txt)
+        for n in rm.findall("nanori"):
+            txt = (n.text or "").strip()
+            if txt:
+                nanori.append(txt)
+
+        if not (meanings or on or kun):
+            continue  # no useful data -> do not manufacture a blank entry
+
+        misc = char.find("misc")
+
+        def _int(tag):
+            if misc is None:
+                return None
+            txt = misc.findtext(tag)
+            if txt is None:
+                return None
+            try:
+                return int(txt)
+            except ValueError:
+                return None
+
+        out[literal] = {
+            "meanings": meanings,
+            "on": on,
+            "kun": kun,
+            "nanori": nanori,
+            "stroke_count": _int("stroke_count"),
+            "grade": _int("grade"),
+            "jlpt": _int("jlpt"),
+        }
+    return out
+
+
+def kanjidic2_record(character, fields):
+    """Build a normalized fallback record from parsed KANJIDIC2 fields.
+
+    Shares the exact record shape produced by normalize_record so every bank
+    builder works unchanged. Honest omissions: frequency_rank is None (Jiten's
+    rank scale is not KANJIDIC2's newspaper-frequency and the two must not be
+    conflated), and examples is empty (KANJIDIC2 supplies no example words), so
+    no frequency meta, reading-distribution donut, or enrichment is ever
+    fabricated for these characters.
+    """
+    senses = clean_meanings(fields.get("meanings"))
+    on = [r for r in (fields.get("on") or []) if isinstance(r, str) and r.strip()]
+    kun = [r for r in (fields.get("kun") or []) if isinstance(r, str) and r.strip()]
+    return {
+        "character": character,
+        "keyword": senses[0] if senses else None,
+        "senses": senses,
+        "on": on,
+        "kun": kun,
+        "frequency_rank": None,   # KANJIDIC2 provides no Jiten-comparable rank
+        "stroke_count": fields.get("stroke_count"),
+        "grade": fields.get("grade"),
+        "jlpt": fields.get("jlpt"),
+        "examples": [],            # never invent example words
+    }
+
+
+def merge_kanjidic2(jiten_records, kanjidic2_index):
+    """Merge Jiten records with KANJIDIC2 fallbacks, Jiten authoritative.
+
+    Every Jiten record is preserved verbatim (its enriched keyword, meanings,
+    readings, rank, examples, and reading distribution are untouched). For each
+    KANJIDIC2 character ABSENT from Jiten, a clean fallback record is appended.
+    The result is unique by character (duplicates impossible) and ordered
+    deterministically by Unicode codepoint.
+    """
+    present = {r["character"] for r in jiten_records}
+    merged = list(jiten_records)
+    for char in sorted(kanjidic2_index, key=lambda c: ord(c)):
+        if char in present:
+            continue  # Jiten wins on every duplicate
+        merged.append(kanjidic2_record(char, kanjidic2_index[char]))
+        present.add(char)
+    merged.sort(key=lambda r: ord(r["character"]))
+    return merged
+
+
 # --- Reading-distribution donut ----------------------------------------------
 
 # At most this many labelled donut segments; any tail collapses into "Other".
@@ -1052,7 +1182,7 @@ def build_index(revision):
         "indexUrl": f"https://raw.githubusercontent.com/{REPO}/main/dist/index.json",
         "downloadUrl": f"https://github.com/{REPO}/releases/latest/download/{ZIP_NAME}",
         "url": f"https://github.com/{REPO}",
-        "description": "Minimal kanji dictionary generated from Jiten data.",
+        "description": "Kanji dictionary from Jiten data with KANJIDIC2 fallback coverage.",
         "attribution": ATTRIBUTION,
         "sourceLanguage": "ja",
         "targetLanguage": "en",
@@ -1316,19 +1446,75 @@ def assemble_enrichment(svgs, ranks):
     }
 
 
+# --- KANJIDIC2 static-source acquisition (once-per-day, resumable cache) ------
+
+KANJIDIC2_URL = "http://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
+
+
+def fetch_kanjidic2():
+    """Fetch and gunzip the static KANJIDIC2 XML from EDRDG (single request)."""
+    import gzip
+
+    req = urllib.request.Request(KANJIDIC2_URL, headers={"User-Agent": USER_AGENT})
+    last_err = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                return gzip.decompress(resp.read()).decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 or 500 <= e.code < 600:
+                last_err = e
+            else:
+                raise
+        except urllib.error.URLError as e:
+            last_err = e
+        if attempt < MAX_RETRIES:
+            time.sleep(2 ** attempt)
+    raise last_err if last_err is not None else RuntimeError("failed to GET KANJIDIC2")
+
+
+def fetch_kanjidic2_source(cache_dir, date, fetcher=fetch_kanjidic2):
+    """Return the KANJIDIC2 XML for DATE, fetching the static source once a day.
+
+    Mirrors the Jiten/KanjiVG resumable dated-cache flow: the decompressed XML
+    is stored at cache_dir/DATE/kanjidic2.xml and reused on same-day reruns, so
+    the daily workflow downloads the static source at most once per UTC day.
+    """
+    import pathlib as _pl
+
+    day_dir = _pl.Path(cache_dir) / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / "kanjidic2.xml"
+    if path.exists():
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError:
+            pass
+    xml_text = fetcher()
+    tmp = path.with_suffix(".xml.tmp")
+    tmp.write_text(xml_text, encoding="utf-8")
+    tmp.replace(path)
+    return xml_text
+
+
 # --- Build pipeline and revision decision ------------------------------------
 
 def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
-              kanjivg_cache_dir=None, kanjivg_fetcher=fetch_kanjivg):
-    """Fetch (via cache) -> normalize -> enrich -> build banks + ZIP for a date.
+              kanjivg_cache_dir=None, kanjivg_fetcher=fetch_kanjivg,
+              kanjidic2_cache_dir=None, kanjidic2_fetcher=fetch_kanjidic2):
+    """Fetch (via cache) -> normalize -> merge -> enrich -> build banks + ZIP.
 
     Acquires Jiten payloads AND (when kanjivg_cache_dir is given) KanjiVG SVGs,
-    both through the same resumable dated cache. Assembles the visual enrichment
-    (stroke info, phonetic families, sanitized SVG assets) and threads it into
-    the term entries and the canonical ZIP. content_hash is revision-independent
-    and covers the enrichment (assets), so a change in stroke/phonetic data
-    triggers a new revision. Returns {records, banks, enrichment, content_hash,
-    zip_bytes(placeholder revision)}.
+    both through the same resumable dated cache. When kanjidic2_cache_dir is
+    given, the static KANJIDIC2 XML is fetched once for the day and every
+    character it covers that Jiten does NOT serve is added as a simple honest
+    fallback record (Jiten stays authoritative on every duplicate). Assembles
+    the visual enrichment (stroke info, phonetic families, sanitized SVG assets)
+    over the merged record set and threads it into the term entries and the
+    canonical ZIP. content_hash is revision-independent and covers the
+    enrichment (assets), so a change in stroke/phonetic/fallback data triggers a
+    new revision. Returns {records, banks, enrichment, content_hash,
+    zip_bytes(placeholder revision), source_counts}.
     """
     payloads = fetch_all(characters, cache_dir, date, fetcher)
     records = []
@@ -1340,6 +1526,13 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
             records.append(normalize_record(payload))
         except MalformedPayload:
             continue  # skip characters whose payload cannot be trusted
+
+    jiten_count = len(records)
+    if kanjidic2_cache_dir:
+        xml_text = fetch_kanjidic2_source(kanjidic2_cache_dir, date, kanjidic2_fetcher)
+        kd2_index = parse_kanjidic2(xml_text)
+        records = merge_kanjidic2(records, kd2_index)
+    kanjidic2_count = len(records) - jiten_count
 
     ranks = {r["character"]: r["frequency_rank"] for r in records}
     enrichment = {"strokes": {}, "families": {}, "families_by_char": {}, "assets": {}}
@@ -1355,6 +1548,7 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         "banks": banks,
         "enrichment": enrichment,
         "content_hash": chash,
+        "source_counts": {"jiten": jiten_count, "kanjidic2": kanjidic2_count},
         "zip_bytes": build_zip(banks, date_to_revision(date), enrichment.get("assets")),
     }
 
@@ -1433,6 +1627,10 @@ def main(argv=None):
     parser.add_argument("--offline", action="store_true", help="use cache only; no network")
     parser.add_argument("--no-kanjivg", action="store_true",
                         help="skip KanjiVG acquisition/enrichment (data-only build)")
+    parser.add_argument("--kanjidic2-cache", default="kanjidic2-cache",
+                        help="dated cache dir for the static KANJIDIC2 XML source")
+    parser.add_argument("--no-kanjidic2", action="store_true",
+                        help="skip KANJIDIC2 fallback (Jiten-only build)")
     args = parser.parse_args(argv)
 
     date = args.date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -1452,13 +1650,20 @@ def main(argv=None):
     kvg_fetcher = (
         _offline_kanjivg_fetcher(args.kanjivg_cache, date) if args.offline else fetch_kanjivg
     )
+    kanjidic2_cache = None if args.no_kanjidic2 else args.kanjidic2_cache
+    kd2_fetcher = (
+        _offline_kanjidic2_fetcher(args.kanjidic2_cache, date) if args.offline else fetch_kanjidic2
+    )
     result = run_build(
         characters, args.cache, date, DEFAULT_ALIASES, fetcher,
         kanjivg_cache_dir=kanjivg_cache, kanjivg_fetcher=kvg_fetcher,
+        kanjidic2_cache_dir=kanjidic2_cache, kanjidic2_fetcher=kd2_fetcher,
     )
     enr = result["enrichment"]
+    sc = result.get("source_counts", {"jiten": len(result["records"]), "kanjidic2": 0})
     print(
-        f"[build] {len(result['records'])} clean records; "
+        f"[build] {len(result['records'])} clean records "
+        f"(Jiten {sc['jiten']} + KANJIDIC2 fallback {sc['kanjidic2']}); "
         f"{len(enr['strokes'])} stroke sets; {len(enr['families'])} phonetic families; "
         f"hash={result['content_hash'][:12]}"
     )
@@ -1517,6 +1722,21 @@ def _offline_kanjivg_fetcher(cache_dir, date):
         path = day / kanjivg_cache_filename(char)
         if not path.exists():
             raise NotFound(char)
+        return path.read_text(encoding="utf-8")
+
+    return fetcher
+
+
+def _offline_kanjidic2_fetcher(cache_dir, date):
+    """Return a KANJIDIC2 source fetcher that only reads the dated cache."""
+    import pathlib as _pl
+
+    day = _pl.Path(cache_dir) / date
+
+    def fetcher():
+        path = day / "kanjidic2.xml"
+        if not path.exists():
+            raise FileNotFoundError(f"KANJIDIC2 cache missing: {path}")
         return path.read_text(encoding="utf-8")
 
     return fetcher

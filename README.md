@@ -28,8 +28,10 @@
 
 A small, understandable generator that turns [Jiten](https://jiten.moe) kanji
 data into a single canonical [Yomitan](https://github.com/yomidevs/yomitan)
-dictionary. It rebuilds once per day and publishes a self-updating ZIP that
-Yomitan can update in place.
+dictionary, with [KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project)
+as a simple licensed fallback so the coverage reaches well beyond Jiten's live
+set. It rebuilds once per day and publishes a self-updating ZIP that Yomitan
+can update in place.
 
 ## What is this?
 
@@ -45,15 +47,21 @@ Compared to importing raw KANJIDIC or general Yomitan kanji data, you get the
 same underlying facts plus example vocabulary, a computed reading distribution,
 and bundled stroke/phonetic aids in a single canonical ZIP. Compared to the
 older compact helper, entries are richer and self-updating, with no editions to
-choose between. Everything is derived from Jiten/KANJIDIC and KanjiVG and
-attributed below — no new claims are invented.
+choose between. Where Jiten serves a character its enriched entry is
+authoritative; every remaining character KANJIDIC2 covers is added as an honest
+fallback (English meanings, on/kun/nanori readings, stroke count, grade/JLPT
+when present) with no invented examples, ranks, or percentages. Everything is
+derived from Jiten, KANJIDIC2/KANJIDIC, and KanjiVG and attributed below — no
+new claims are invented.
 
 ## Screenshots
 
 These are an honest **package preview**: each image is rendered from the exact
 structured content, `styles.css`, and bundled KanjiVG assets inside the shipped
 release ZIP (via `scripts/render_screenshots.py`), so they show what Yomitan
-draws from the package rather than an invented mockup.
+draws from the package rather than an invented mockup. They show 場, a fully
+enriched Jiten-sourced entry (the richest case); KANJIDIC2 fallback characters
+render a plainer card with just their readings, meanings, and stroke data.
 
 | Compact entry (場) | Expanded learning aids | Narrow / reduced-motion |
 | :---: | :---: | :---: |
@@ -70,8 +78,11 @@ draws from the package rather than an invented mockup.
 
 ## What you get
 
-One Yomitan dictionary covering every clean character Jiten serves. Each entry
-prioritizes what actually helps recall:
+One Yomitan dictionary spanning **12,600+ characters** — every clean character
+Jiten serves (with its full enrichment) plus every remaining character
+[KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project) covers as a
+simple licensed fallback. Jiten-sourced entries prioritize what actually helps
+recall:
 
 - a **keyword / meaning** and a compact list of common senses,
 - honest **on / kun readings** exactly as Jiten supplies them,
@@ -102,6 +113,15 @@ use rank-based mode. Junk (`missing`, `???`, leaked markup, malformed ruby,
 misleading `totalWords`-derived percentages) is removed. There is exactly **one
 canonical ZIP** — no Core/Standard/Extended editions.
 
+**KANJIDIC2 fallback entries** (characters Jiten does not serve) carry only the
+fields KANJIDIC2 actually provides — English meanings, on/kun/nanori readings,
+stroke count, and grade/JLPT when present — and honestly omit everything Jiten
+would have supplied: no example vocabulary, no frequency rank or frequency-bank
+entry, no reading-distribution donut, and no phonetic family or Jiten
+attribution. Where a KanjiVG stroke diagram exists it is still attached (that is
+KanjiVG data, not Jiten's). Jiten always wins on a shared character, so its
+enriched entry is never weakened or overwritten.
+
 ## Updating
 
 Yomitan offers updates when a newer revision is published: it checks the
@@ -126,6 +146,10 @@ python -m bees_kanji             # writes build/ + refreshes dist/index.json
 - KanjiVG stroke SVGs are acquired the same way — once per UTC day into
   `kanjivg-cache/<UTC-date>/`, resumable and cache-first — then sanitized and
   bundled. No API key, no extra acquisition machinery.
+- The static [KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project)
+  XML (the licensed fallback source) is fetched once per UTC day into
+  `kanjidic2-cache/<UTC-date>/`, reused on same-day reruns, and merged so every
+  character it covers that Jiten lacks becomes an honest fallback entry.
 - The build is reproducible: identical inputs produce a byte-identical ZIP.
 - A new release is published only when the normalized dictionary content
   (including the bundled stroke/phonetic enrichment) actually changes; the
@@ -133,7 +157,8 @@ python -m bees_kanji             # writes build/ + refreshes dist/index.json
 
 Useful flags: `--limit N` (build the first N characters, for a quick check),
 `--offline` (use the cache only), `--no-kanjivg` (data-only build, skip stroke
-enrichment), `--date YYYY-MM-DD`.
+enrichment), `--no-kanjidic2` (Jiten-only build, skip the fallback expansion),
+`--date YYYY-MM-DD`.
 
 ## Tests
 
@@ -144,10 +169,12 @@ python -m pytest -q
 Focused tests cover 場 / 男 / 事 / 生 / 行 / 髙, malformed API data, the
 Top-1000 quality floor, deterministic output, the reading-distribution donut,
 KanjiVG phonetic families / stroke sanitization / animation fallback, the
-Anki/Lapis field mapping, and validation against the pinned official Yomitan
-schemas (also checked end-to-end via `scripts/validate_yomitan.mjs`, which
-additionally verifies bundled SVGs are sanitized and every referenced media
-asset resolves).
+KANJIDIC2 fallback parser and merge (Jiten wins on duplicates, fallback records
+omit unsupported frequency/examples/enrichment, no duplicate characters, valid
+Unicode), the Anki/Lapis field mapping, and validation against the pinned
+official Yomitan schemas (also checked end-to-end via
+`scripts/validate_yomitan.mjs`, which additionally verifies bundled SVGs are
+sanitized and every referenced media asset resolves).
 
 ## Anki / Lapis cards
 
