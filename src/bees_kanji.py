@@ -119,3 +119,160 @@ def parse_furigana(furigana):
     if pos != len(furigana) or not segments:
         return None
     return segments
+
+
+# --- Record normalization ----------------------------------------------------
+
+class MalformedPayload(ValueError):
+    """Raised when a Jiten payload cannot be trusted / parsed."""
+
+
+# Selection tuning constants (from the frozen contract).
+RANK_CUTOFF = 25000       # drop example words rarer than this
+MAX_GROUPS = 3            # at most 3 useful reading groups
+MAX_PER_GROUP = 2         # 1-2 examples per group
+MAX_EXAMPLES = 6          # never more than 6 examples total
+
+
+def _clean_example(word):
+    """Return a clean example dict, or None if the word is junk."""
+    if not isinstance(word, dict):
+        return None
+    surface = clean_text(word.get("reading"))
+    gloss = clean_text(word.get("mainDefinition"))
+    rank = word.get("frequencyRank")
+    if surface is None or gloss is None:
+        return None
+    if not isinstance(rank, int) or rank <= 0 or rank > RANK_CUTOFF:
+        return None
+    ruby = parse_furigana(word.get("readingFurigana"))
+    if ruby is None:
+        return None
+    word_id = word.get("wordId")
+    reading_index = word.get("readingIndex", 0)
+    if not isinstance(word_id, int):
+        return None
+    return {
+        "surface": surface,
+        "gloss": gloss,
+        "rank": rank,
+        "ruby": ruby,
+        "word_id": word_id,
+        "reading_index": reading_index if isinstance(reading_index, int) else 0,
+    }
+
+
+def _select_examples(payload, on, kun):
+    """Pick up to MAX_GROUPS reading groups, MAX_PER_GROUP words each, capped
+    at MAX_EXAMPLES total, chosen by best (lowest) word rank -- never by
+    totalWords. Falls back to topWords when grouped candidates run short.
+    """
+    seen = set()  # (word_id, reading_index) dedup keys, global
+
+    def take(words):
+        out = []
+        for w in sorted(words, key=lambda e: e["rank"]):
+            key = (w["word_id"], w["reading_index"])
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(w)
+            if len(out) >= MAX_PER_GROUP:
+                break
+        return out
+
+    groups = []
+    for grp in payload.get("wordsByReading") or []:
+        if not isinstance(grp, dict):
+            continue
+        reading = clean_text(grp.get("reading"))
+        if reading is None:
+            continue
+        cands = [c for c in (_clean_example(w) for w in grp.get("words") or []) if c]
+        if not cands:
+            continue
+        best_rank = min(c["rank"] for c in cands)
+        groups.append({
+            "reading": reading,
+            "reading_class": classify_reading(reading, on, kun),
+            "best_rank": best_rank,
+            "candidates": cands,
+        })
+
+    # Sort reading groups by their best candidate rank (most common first).
+    groups.sort(key=lambda g: g["best_rank"])
+
+    result = []
+    total = 0
+    for g in groups:
+        if len(result) >= MAX_GROUPS or total >= MAX_EXAMPLES:
+            break
+        words = take(g["candidates"])
+        if not words:
+            continue
+        words = words[: max(0, MAX_EXAMPLES - total)]
+        if not words:
+            break
+        result.append({
+            "reading": g["reading"],
+            "reading_class": g["reading_class"],
+            "label": g["reading_class"],
+            "words": words,
+        })
+        total += len(words)
+
+    # Fallback: if grouped selection produced nothing, use topWords.
+    if not result:
+        cands = [c for c in (_clean_example(w) for w in payload.get("topWords") or []) if c]
+        picked = []
+        for w in sorted(cands, key=lambda e: e["rank"]):
+            key = (w["word_id"], w["reading_index"])
+            if key in seen:
+                continue
+            seen.add(key)
+            picked.append(w)
+            if len(picked) >= MAX_GROUPS:
+                break
+        if picked:
+            result.append({
+                "reading": "",
+                "reading_class": "Other",
+                "label": "Other",
+                "words": picked,
+            })
+    return result
+
+
+def normalize_record(payload):
+    """Normalize a raw Jiten kanji payload into a clean record dict.
+
+    Raises MalformedPayload if the payload is not a usable kanji object.
+    """
+    if not isinstance(payload, dict):
+        raise MalformedPayload("payload is not an object")
+    character = payload.get("character")
+    if not isinstance(character, str) or len(character) != 1:
+        raise MalformedPayload("missing/invalid single-character 'character'")
+
+    senses = clean_meanings(payload.get("meanings"))
+    on = [r for r in (payload.get("onReadings") or []) if isinstance(r, str) and r.strip()]
+    kun = [r for r in (payload.get("kunReadings") or []) if isinstance(r, str) and r.strip()]
+
+    rank = payload.get("frequencyRank")
+    rank = rank if isinstance(rank, int) and rank > 0 else None
+
+    def _int_or_none(v):
+        return v if isinstance(v, int) else None
+
+    return {
+        "character": character,
+        "keyword": senses[0] if senses else None,
+        "senses": senses,
+        "on": on,
+        "kun": kun,
+        "frequency_rank": rank,
+        "stroke_count": _int_or_none(payload.get("strokeCount")),
+        "grade": _int_or_none(payload.get("grade")),
+        "jlpt": _int_or_none(payload.get("jlptLevel")),
+        "examples": _select_examples(payload, on, kun),
+    }
