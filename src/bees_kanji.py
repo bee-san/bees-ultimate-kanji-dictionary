@@ -468,10 +468,10 @@ def build_donut_node(record):
 
 # --- KanjiVG-sourced phonetic families ---------------------------------------
 
-# KanjiVG records phonetic components via the kvg:phon attribute. We only ever
-# surface a phonetic relationship that KanjiVG itself marks -- never inferred.
-_KVG_PHON = re.compile(r'kvg:element="([^"]+)"[^>]*kvg:phon="([^"]+)"')
-_KVG_PHON_ALT = re.compile(r'kvg:phon="([^"]+)"[^>]*kvg:element="([^"]+)"')
+# KanjiVG records the phonetic component via a kvg:phon attribute on the
+# phonetic-component sub-group (e.g. 時 = 日 + 寺, where the 寺 group carries
+# kvg:phon="寺"). We only ever surface a relationship KanjiVG itself marks.
+_KVG_PHON = re.compile(r'kvg:phon="([^"]+)"')
 
 PHONETIC_SOURCE = "KanjiVG"
 
@@ -479,20 +479,17 @@ PHONETIC_SOURCE = "KanjiVG"
 def extract_phonetic_component(svg_text, character):
     """Return the phonetic component KanjiVG marks for a character, else None.
 
-    Reads only the kvg:phon marker attached to the top-level element group.
-    Never infers a component; a self-referential marker (phon == character) is
-    not a family relationship and returns None.
+    KanjiVG attaches kvg:phon to the phonetic sub-component group anywhere in
+    the glyph tree; its value is the phonetic component of the whole character.
+    Never inferred. A marker equal to the character itself is not a phonetic
+    family relationship and returns None. When several markers appear, the first
+    (outermost) is used deterministically.
     """
     if not isinstance(svg_text, str) or not isinstance(character, str):
         return None
-    for m in _KVG_PHON.finditer(svg_text):
-        element, phon = m.group(1), m.group(2)
-        if element == character:
-            return phon if phon and phon != character else None
-    for m in _KVG_PHON_ALT.finditer(svg_text):
-        phon, element = m.group(1), m.group(2)
-        if element == character:
-            return phon if phon and phon != character else None
+    for comp in _KVG_PHON.findall(svg_text):
+        if comp and comp != character:
+            return comp
     return None
 
 
@@ -1063,9 +1060,17 @@ def build_index(revision):
     }
 
 
-def content_hash(banks):
-    """SHA-256 over the normalized bank content only (revision-independent)."""
-    payload = dump_json({name: banks[name] for _, name in BANK_FILES})
+def content_hash(banks, assets=None):
+    """SHA-256 over the normalized bank content + bundled assets.
+
+    Revision-independent (excludes the revision string and build time) but
+    covers KanjiVG-derived assets so a change in stroke/phonetic enrichment
+    yields a new hash and therefore a new published revision.
+    """
+    material = {name: banks[name] for _, name in BANK_FILES}
+    if assets:
+        material["_assets"] = {k: assets[k] for k in sorted(assets)}
+    payload = dump_json(material)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -1313,12 +1318,17 @@ def assemble_enrichment(svgs, ranks):
 
 # --- Build pipeline and revision decision ------------------------------------
 
-def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji):
-    """Fetch (via cache) -> normalize -> build banks + ZIP for the given date.
+def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
+              kanjivg_cache_dir=None, kanjivg_fetcher=fetch_kanjivg):
+    """Fetch (via cache) -> normalize -> enrich -> build banks + ZIP for a date.
 
-    Returns {records, banks, content_hash, zip_bytes(unrevised placeholder)}.
-    The ZIP here uses a placeholder revision; the caller stamps the final
-    revision after the change decision. content_hash is revision-independent.
+    Acquires Jiten payloads AND (when kanjivg_cache_dir is given) KanjiVG SVGs,
+    both through the same resumable dated cache. Assembles the visual enrichment
+    (stroke info, phonetic families, sanitized SVG assets) and threads it into
+    the term entries and the canonical ZIP. content_hash is revision-independent
+    and covers the enrichment (assets), so a change in stroke/phonetic data
+    triggers a new revision. Returns {records, banks, enrichment, content_hash,
+    zip_bytes(placeholder revision)}.
     """
     payloads = fetch_all(characters, cache_dir, date, fetcher)
     records = []
@@ -1330,13 +1340,22 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji):
             records.append(normalize_record(payload))
         except MalformedPayload:
             continue  # skip characters whose payload cannot be trusted
-    banks = build_banks(records, aliases or {})
-    chash = content_hash(banks)
+
+    ranks = {r["character"]: r["frequency_rank"] for r in records}
+    enrichment = {"strokes": {}, "families": {}, "families_by_char": {}, "assets": {}}
+    if kanjivg_cache_dir:
+        present = [r["character"] for r in records]
+        svgs = fetch_kanjivg_all(present, kanjivg_cache_dir, date, kanjivg_fetcher)
+        enrichment = assemble_enrichment(svgs, ranks)
+
+    banks = build_banks(records, aliases or {}, enrichment=enrichment)
+    chash = content_hash(banks, enrichment.get("assets"))
     return {
         "records": records,
         "banks": banks,
+        "enrichment": enrichment,
         "content_hash": chash,
-        "zip_bytes": build_zip(banks, date_to_revision(date)),
+        "zip_bytes": build_zip(banks, date_to_revision(date), enrichment.get("assets")),
     }
 
 
@@ -1405,11 +1424,15 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="Build Bee's Ultimate Kanji Dictionary")
     parser.add_argument("--cache", default="cache")
+    parser.add_argument("--kanjivg-cache", default="kanjivg-cache",
+                        help="dated cache dir for KanjiVG stroke SVGs")
     parser.add_argument("--out", default="build")
     parser.add_argument("--dist", default="dist")
     parser.add_argument("--date", default=None, help="UTC date YYYY-MM-DD (default: today)")
     parser.add_argument("--limit", type=int, default=None, help="limit characters (debug)")
     parser.add_argument("--offline", action="store_true", help="use cache only; no network")
+    parser.add_argument("--no-kanjivg", action="store_true",
+                        help="skip KanjiVG acquisition/enrichment (data-only build)")
     args = parser.parse_args(argv)
 
     date = args.date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -1425,8 +1448,20 @@ def main(argv=None):
     print(f"[build] {len(characters)} characters from sitemap")
 
     fetcher = _offline_fetcher(args.cache, date) if args.offline else fetch_kanji
-    result = run_build(characters, args.cache, date, DEFAULT_ALIASES, fetcher)
-    print(f"[build] {len(result['records'])} clean records; hash={result['content_hash'][:12]}")
+    kanjivg_cache = None if args.no_kanjivg else args.kanjivg_cache
+    kvg_fetcher = (
+        _offline_kanjivg_fetcher(args.kanjivg_cache, date) if args.offline else fetch_kanjivg
+    )
+    result = run_build(
+        characters, args.cache, date, DEFAULT_ALIASES, fetcher,
+        kanjivg_cache_dir=kanjivg_cache, kanjivg_fetcher=kvg_fetcher,
+    )
+    enr = result["enrichment"]
+    print(
+        f"[build] {len(result['records'])} clean records; "
+        f"{len(enr['strokes'])} stroke sets; {len(enr['families'])} phonetic families; "
+        f"hash={result['content_hash'][:12]}"
+    )
 
     prev_rev, prev_hash = _load_previous(dist_dir / "index.json")
     revision = decide_revision(result["content_hash"], prev_hash, date, prev_rev)
@@ -1434,7 +1469,7 @@ def main(argv=None):
         print("[build] content unchanged; nothing to publish")
         return 0
 
-    zip_bytes = build_zip(result["banks"], revision)
+    zip_bytes = build_zip(result["banks"], revision, enr.get("assets"))
     zip_path = out_dir / ZIP_NAME
     zip_path.write_bytes(zip_bytes)
 
@@ -1468,6 +1503,21 @@ def _offline_fetcher(cache_dir, date):
         if not path.exists():
             raise NotFound(char)
         return json.loads(path.read_text(encoding="utf-8"))
+
+    return fetcher
+
+
+def _offline_kanjivg_fetcher(cache_dir, date):
+    """Return a KanjiVG fetcher that only reads the dated cache (else NotFound)."""
+    import pathlib as _pl
+
+    day = _pl.Path(cache_dir) / date
+
+    def fetcher(char):
+        path = day / kanjivg_cache_filename(char)
+        if not path.exists():
+            raise NotFound(char)
+        return path.read_text(encoding="utf-8")
 
     return fetcher
 

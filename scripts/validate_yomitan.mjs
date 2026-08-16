@@ -4,11 +4,17 @@
 // Usage: node scripts/validate_yomitan.mjs <path-to-dictionary.zip>
 //
 // Checks:
-//   - all expected members are present at the ZIP root (no subfolders)
+//   - data JSON, index.json, styles.css and the LICENSE notices are at the ZIP
+//     root (Yomitan requires bank JSON at the root); the only permitted
+//     subfolder members are bundled media assets under kanjivg/*.svg
 //   - index.json, term/kanji bank, and term/kanji meta bank each validate
 //     against schemas/*.json using JSON Schema draft-07 (ajv)
+//   - every bundled kanjivg/*.svg is sanitized (no <script>, kvg: attrs, xlink,
+//     event handlers, or external <image>)
+//   - every structured-content img path referenced by the term bank resolves to
+//     a bundled asset (no dangling media references)
 //
-// Dependencies: ajv (installed on demand by the workflow / dev setup).
+// Dependencies: ajv, adm-zip (installed on demand by the workflow / dev setup).
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -29,12 +35,14 @@ if (!zipPath) {
   process.exit(2);
 }
 
-const EXPECTED = [
+// Members that MUST live at the ZIP root.
+const EXPECTED_ROOT = [
   "index.json",
   "term_bank_1.json",
   "term_meta_bank_1.json",
   "kanji_bank_1.json",
   "kanji_meta_bank_1.json",
+  "styles.css",
   "LICENSE-data.txt",
 ];
 
@@ -52,27 +60,45 @@ function loadSchema(name) {
 
 const zip = new AdmZip(zipPath);
 const names = zip.getEntries().map((e) => e.entryName);
+const nameSet = new Set(names);
 
 let ok = true;
 
-// All members present, at the root only.
+// Only media assets may live in a subfolder; everything else is root-only.
 for (const name of names) {
-  if (name.includes("/")) {
-    console.error(`FAIL: member not at ZIP root: ${name}`);
+  if (name.includes("/") && !/^kanjivg\/[0-9a-f]+\.svg$/.test(name)) {
+    console.error(`FAIL: unexpected non-root member: ${name}`);
     ok = false;
   }
 }
-for (const want of EXPECTED) {
-  if (!names.includes(want)) {
+for (const want of EXPECTED_ROOT) {
+  if (!nameSet.has(want)) {
     console.error(`FAIL: missing expected member: ${want}`);
     ok = false;
+  }
+}
+
+// Bundled SVG assets must be sanitized and license notice present when shipped.
+const svgAssets = names.filter((n) => n.startsWith("kanjivg/"));
+if (svgAssets.length > 0 && !nameSet.has("LICENSE-kanjivg.txt")) {
+  console.error("FAIL: KanjiVG assets present but LICENSE-kanjivg.txt missing");
+  ok = false;
+}
+const FORBIDDEN = [/<script/i, /kvg:/, /xlink/i, /\son\w+=/i, /<image/i, /<!doctype/i];
+for (const asset of svgAssets) {
+  const text = zip.readAsText(asset);
+  for (const re of FORBIDDEN) {
+    if (re.test(text)) {
+      console.error(`FAIL: unsanitized content ${re} in ${asset}`);
+      ok = false;
+    }
   }
 }
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 
 for (const [member, schemaName] of Object.entries(SCHEMA_FOR)) {
-  if (!names.includes(member)) continue;
+  if (!nameSet.has(member)) continue;
   const data = JSON.parse(zip.readAsText(member));
   const validate = ajv.compile(loadSchema(schemaName));
   if (!validate(data)) {
@@ -85,6 +111,30 @@ for (const [member, schemaName] of Object.entries(SCHEMA_FOR)) {
     const count = Array.isArray(data) ? data.length : 1;
     console.log(`OK: ${member} (${count} entries) matches ${schemaName}`);
   }
+}
+
+// Every referenced structured-content img path must resolve to a bundled asset.
+if (nameSet.has("term_bank_1.json")) {
+  const terms = JSON.parse(zip.readAsText("term_bank_1.json"));
+  const referenced = new Set();
+  const walk = (node) => {
+    if (Array.isArray(node)) {
+      node.forEach(walk);
+    } else if (node && typeof node === "object") {
+      if (node.tag === "img" && typeof node.path === "string") {
+        referenced.add(node.path);
+      }
+      for (const v of Object.values(node)) walk(v);
+    }
+  };
+  walk(terms);
+  for (const path of referenced) {
+    if (!nameSet.has(path)) {
+      console.error(`FAIL: dangling img asset reference: ${path}`);
+      ok = false;
+    }
+  }
+  console.log(`OK: ${referenced.size} referenced img assets all resolve`);
 }
 
 if (!ok) {

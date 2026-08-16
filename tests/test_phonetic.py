@@ -10,9 +10,13 @@ import bees_kanji as bk
 
 
 def test_phon_extracted_from_kvg_phon_attribute():
+    # Real KanjiVG marks kvg:phon on the phonetic-component CHILD group, not the
+    # top-level character element (時 = 日 + 寺, where 寺 carries kvg:phon="寺").
     svg = (
-        '<svg xmlns:kvg="x"><g kvg:element="\u6642" kvg:phon="\u5bfa">'
-        '<g kvg:element="\u65e5"/><g kvg:element="\u5bfa"/></g></svg>'
+        '<svg xmlns:kvg="x"><g kvg:element="\u6642">'
+        '<g kvg:element="\u65e5"/>'
+        '<g kvg:element="\u5bfa" kvg:phon="\u5bfa"><g kvg:element="\u571f"/></g>'
+        "</g></svg>"
     )
     assert bk.extract_phonetic_component(svg, "\u6642") == "\u5bfa"  # 時 -> 寺
 
@@ -22,8 +26,9 @@ def test_phon_absent_returns_none_never_invented():
     assert bk.extract_phonetic_component(svg, "\u751f") is None
 
 
-def test_phon_ignores_self_referential_marker():
-    # A kvg:phon that equals the character itself is not a family relationship.
+def test_phon_ignores_component_equal_to_character():
+    # If the only kvg:phon equals the character itself, that is not a phonetic
+    # family relationship for that character.
     svg = '<svg xmlns:kvg="x"><g kvg:element="\u5bfa" kvg:phon="\u5bfa"/></svg>'
     assert bk.extract_phonetic_component(svg, "\u5bfa") is None
 
