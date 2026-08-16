@@ -900,6 +900,96 @@ LICENSE_DATA_TEXT = (
     "https://www.edrdg.org/edrdg/licence.html.\n"
 )
 
+# KanjiVG (stroke-order SVGs + phonetic-component markers) is Copyright (C)
+# Ulrich Apel, distributed under CC BY-SA 3.0. Bundled SVGs are adapted (stroke
+# geometry only, re-styled for animation); the share-alike obligation is met by
+# redistributing them under the same/compatible CC BY-SA licence.
+LICENSE_KANJIVG_TEXT = (
+    "Stroke-order diagrams and phonetic-component (kvg:phon) relationships are\n"
+    "derived from KanjiVG, Copyright (C) 2009-2011 Ulrich Apel.\n"
+    "KanjiVG is distributed under the Creative Commons Attribution-Share Alike\n"
+    "3.0 licence; see https://creativecommons.org/licenses/by-sa/3.0/ and\n"
+    "https://kanjivg.tagaini.net/. The bundled SVGs are adaptations (stroke\n"
+    "geometry extracted and re-styled for lightweight stroke-order animation);\n"
+    "they are redistributed under the same CC BY-SA licence (share-alike).\n"
+)
+
+# Compact, accessible stylesheet scoped to this dictionary's structured content.
+# Loaded by Yomitan as styles.css at the ZIP root. Structured-content `data`
+# keys become `data-sc-*` attributes, so every rule below targets our own
+# `data-sc-bee-role` markers -- it never restyles unrelated dictionaries.
+STYLES_CSS = """\
+/* Bee's Ultimate Kanji Dictionary -- compact accessible structured-content CSS.
+   All rules are scoped to our own data-sc-bee-role markers. Colour is never the
+   sole information channel; every graphic has a visible text equivalent. */
+
+[data-sc-bee-role="detail"] { line-height: 1.5; }
+
+/* Progressive disclosure: restrained, keyboard-focusable summaries. */
+[data-sc-bee-role="section"] > summary {
+  cursor: pointer;
+  font-weight: 600;
+  opacity: 0.85;
+}
+[data-sc-bee-role="section"] > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+/* Reading-distribution donut: the ring is a conic-gradient disc (inline
+   background) with a punched hole; the visible legend carries the same data. */
+[data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
+[data-sc-bee-role="donut-graphic"] { display: inline-block; vertical-align: middle; }
+[data-sc-bee-role="donut-ring"] {
+  display: inline-block;
+  width: 3.2em;
+  height: 3.2em;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 0.6em;
+}
+[data-sc-bee-role="donut-hole"] {
+  width: 1.6em;
+  height: 1.6em;
+  margin: 0.8em;
+  border-radius: 50%;
+  background: var(--background-color, #ffffff);
+}
+[data-sc-bee-role="donut-legend"] {
+  display: inline-block;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  vertical-align: middle;
+  font-size: 0.9em;
+}
+[data-sc-bee-role="donut-swatch"] {
+  display: inline-block;
+  width: 0.8em;
+  height: 0.8em;
+  border-radius: 0.15em;
+  margin-right: 0.4em;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+/* Phonetic family line: quiet, wraps gracefully. */
+[data-sc-bee-role="phonetic-family"] { font-size: 0.95em; opacity: 0.9; }
+[data-sc-bee-role="phon-source"] { opacity: 0.65; font-size: 0.85em; }
+
+/* Stroke-order diagram: bounded, centred, with a text fallback beneath it. */
+[data-sc-bee-role="stroke-image"] {
+  max-width: 6em;
+  max-height: 6em;
+}
+[data-sc-bee-role="stroke-text"] { font-size: 0.9em; opacity: 0.9; }
+
+/* Honour reduced-motion for any bundled animation the viewer might run. */
+@media (prefers-reduced-motion: reduce) {
+  [data-sc-bee-role="stroke-image"] { animation: none !important; }
+}
+"""
+
 BANK_FILES = [
     ("term_bank_1.json", "term_bank"),
     ("term_meta_bank_1.json", "term_meta_bank"),
@@ -951,16 +1041,27 @@ def _zip_member(name, data):
     return info, data
 
 
-def build_zip(banks, revision):
+def build_zip(banks, revision, assets=None):
     """Build a deterministic Yomitan ZIP (bytes) with all members at the root.
 
-    Member order, timestamps, and permissions are fixed so two builds from the
-    same inputs are byte-identical.
+    `assets` is an optional {path: text} map of extra bundled files (e.g.
+    sanitized KanjiVG SVGs under kanjivg/). styles.css is always bundled; the
+    KanjiVG licence notice is bundled only when KanjiVG-derived assets ship, to
+    honour the share-alike obligation for exactly what is redistributed. Member
+    order, timestamps, and permissions are fixed so two builds from identical
+    inputs are byte-identical regardless of dict insertion order.
     """
+    assets = assets or {}
     members = [("index.json", dump_json(build_index(revision)))]
     for filename, key in BANK_FILES:
         members.append((filename, dump_json(banks[key])))
+    members.append(("styles.css", STYLES_CSS))
     members.append(("LICENSE-data.txt", LICENSE_DATA_TEXT))
+    if assets:
+        members.append(("LICENSE-kanjivg.txt", LICENSE_KANJIVG_TEXT))
+    # Sort asset paths for deterministic ordering irrespective of insertion.
+    for path in sorted(assets):
+        members.append((path, assets[path]))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -1059,6 +1160,115 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
         tmp.replace(path)
         out[char] = payload
     return out
+
+
+# --- KanjiVG asset acquisition (same resumable dated-cache pattern) ----------
+
+KANJIVG_BASE = "https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji"
+
+
+def kanjivg_cache_filename(character):
+    """Filesystem-safe KanjiVG cache filename (zero-padded codepoint .svg)."""
+    return f"{ord(character):05x}.svg"
+
+
+def http_get_text(url):
+    """GET a URL and return decoded text, with the same bounded retries."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    last_err = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise NotFound(url) from e
+            if e.code == 429 or 500 <= e.code < 600:
+                last_err = e
+            else:
+                raise
+        except urllib.error.URLError as e:
+            last_err = e
+        if attempt < MAX_RETRIES:
+            time.sleep(2 ** attempt)
+    raise last_err if last_err is not None else RuntimeError(f"failed to GET {url}")
+
+
+def fetch_kanjivg(character):
+    """Fetch a single KanjiVG SVG for a character from the live source."""
+    return http_get_text(f"{KANJIVG_BASE}/{kanjivg_cache_filename(character)}")
+
+
+def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
+    """Fetch KanjiVG SVGs, reusing a resumable dated on-disk cache.
+
+    Cache layout mirrors the Jiten fetch: cache_dir/DATE/<codepoint>.svg. Files
+    present for DATE are reused (no fetcher call); only missing characters are
+    fetched sequentially; 404s are skipped. Returns {character: svg_text}. No
+    new machinery -- the same once-per-day, resumable, cache-first flow.
+    """
+    import pathlib as _pl
+
+    day_dir = _pl.Path(cache_dir) / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+
+    out = {}
+    for char in characters:
+        path = day_dir / kanjivg_cache_filename(char)
+        if path.exists():
+            try:
+                out[char] = path.read_text(encoding="utf-8")
+                continue
+            except OSError:
+                pass
+        try:
+            svg = fetcher(char)
+        except NotFound:
+            continue
+        tmp = path.with_suffix(".svg.tmp")
+        tmp.write_text(svg, encoding="utf-8")
+        tmp.replace(path)
+        out[char] = svg
+    return out
+
+
+def assemble_enrichment(svgs, ranks):
+    """Assemble deterministic stroke info, phonetic families, and SVG assets.
+
+    svgs:  {character: kanjivg_svg_text}. ranks: {character: frequency_rank}.
+    Returns {
+        "strokes": {char: parse_kanjivg(...)},
+        "families": {component: family},
+        "families_by_char": {char: family},   # convenience lookup
+        "assets": {asset_path: sanitized_svg}, # only referenced assets
+    }.
+    """
+    strokes = {}
+    phon_map = {}
+    assets = {}
+    for char in sorted(svgs, key=ord):
+        svg = svgs[char]
+        info = parse_kanjivg(svg, char)
+        if info is None:
+            continue
+        strokes[char] = info
+        assets[info["asset"]] = sanitize_kanjivg_svg(svg, char)
+        comp = extract_phonetic_component(svg, char)
+        if comp:
+            phon_map[char] = comp
+
+    families = build_phonetic_families(phon_map, ranks)
+    families_by_char = {}
+    for fam in families.values():
+        for member in fam["members"]:
+            families_by_char[member] = fam
+
+    return {
+        "strokes": strokes,
+        "families": families,
+        "families_by_char": families_by_char,
+        "assets": assets,
+    }
 
 
 # --- Build pipeline and revision decision ------------------------------------

@@ -82,6 +82,7 @@ def test_zip_members_at_root_with_expected_names():
         "term_meta_bank_1.json",
         "kanji_bank_1.json",
         "kanji_meta_bank_1.json",
+        "styles.css",
         "LICENSE-data.txt",
     }
     assert set(names) == expected
