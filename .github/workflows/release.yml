@@ -69,11 +69,12 @@ jobs:
           gh release delete "latest" --yes --cleanup-tag || true
           gh release create "latest" \
             build/bees-ultimate-kanji-dictionary.zip \
+            build/MANIFEST.json \
             build/SHA256SUMS \
             --title "Bee's Ultimate Kanji Dictionary ${{ steps.check.outputs.revision }}" \
-            --notes "Revision ${{ steps.check.outputs.revision }}. Import the ZIP in Yomitan; verify with SHA256SUMS."
+            --notes "Revision ${{ steps.check.outputs.revision }}. Import the ZIP in Yomitan (self-updating). Verify with SHA256SUMS; MANIFEST.json records the source/revision provenance. Bundled licences: LICENSE-data.txt (JMdict/KANJIDIC via Jiten, CC BY-SA) and LICENSE-kanjivg.txt (KanjiVG, CC BY-SA)."
 
-      - name: Verify published asset hash
+      - name: Verify published assets
         if: steps.check.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -82,3 +83,5 @@ jobs:
           gh release download "latest" --dir verify --clobber
           (cd verify && sha256sum -c SHA256SUMS)
           node scripts/validate_yomitan.mjs verify/bees-ultimate-kanji-dictionary.zip
+          # the standalone manifest asset must match the copy bundled in the ZIP
+          python -c "import zipfile,sys; b=zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('MANIFEST.json'); s=open('verify/MANIFEST.json','rb').read(); sys.exit(0 if b==s else 'MANIFEST.json mismatch')"

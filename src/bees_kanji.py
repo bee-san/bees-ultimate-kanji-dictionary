@@ -1208,6 +1208,70 @@ def build_index(revision):
     }
 
 
+def build_manifest(revision, content_hash, date, source_counts,
+                   enrichment_counts, sitemap_size, code_revision):
+    """Build the machine-readable source/revision manifest (MANIFEST.json).
+
+    Describes exactly how this canonical release was produced so an importer or
+    auditor can trace every entry to its source: the dictionary revision, the
+    revision-independent content hash, the UTC acquisition date, per-source
+    record counts (Jiten stays authoritative; KANJIDIC2 is a licensed fallback
+    for characters Jiten does not serve), the KanjiVG-derived enrichment counts,
+    the code revision that generated it, and the licences/attribution. It is
+    bundled in the ZIP (offline provenance) and published as a release asset.
+
+    Every field is derived deterministically from the build inputs, so bundling
+    it inside the ZIP does not disturb reproducible rebuilds.
+    """
+    sc = source_counts or {}
+    ec = enrichment_counts or {}
+    return {
+        "title": TITLE,
+        "revision": revision,
+        "contentHash": content_hash,
+        "buildDate": date,
+        "downloadUrl": f"https://github.com/{REPO}/releases/latest/download/{ZIP_NAME}",
+        "indexUrl": f"https://raw.githubusercontent.com/{REPO}/main/dist/index.json",
+        "url": f"https://github.com/{REPO}",
+        "codeRevision": code_revision,
+        "sources": {
+            "jiten": {
+                "url": "https://jiten.moe",
+                "records": sc.get("jiten", 0),
+                "sitemapCharacters": sitemap_size,
+                "acquisition": "once per UTC day, unauthenticated",
+                "role": "authoritative (enriched entries)",
+            },
+            "kanjidic2": {
+                "url": "https://www.edrdg.org/wiki/index.php/KANJIDIC_Project",
+                "records": sc.get("kanjidic2", 0),
+                "role": "licensed fallback for characters Jiten does not serve",
+            },
+            "kanjivg": {
+                "url": "https://kanjivg.tagaini.net/",
+                "assets": ec.get("assets", 0),
+                "role": "stroke-order diagrams + phonetic-component relationships",
+            },
+        },
+        "records": {
+            "total": sc.get("jiten", 0) + sc.get("kanjidic2", 0),
+            "jiten": sc.get("jiten", 0),
+            "kanjidic2Fallback": sc.get("kanjidic2", 0),
+        },
+        "enrichment": {
+            "strokeSets": ec.get("strokes", 0),
+            "phoneticFamilies": ec.get("families", 0),
+            "bundledSvgAssets": ec.get("assets", 0),
+        },
+        "attribution": ATTRIBUTION,
+        "licences": [
+            "Dictionary data (JMdict/KANJIDIC via Jiten, EDRDG): CC BY-SA 4.0",
+            "KanjiVG stroke/phonetic data: CC BY-SA 3.0",
+            "Generator code: MIT",
+        ],
+    }
+
+
 def content_hash(banks, assets=None):
     """SHA-256 over the normalized bank content + bundled assets.
 
@@ -1234,11 +1298,13 @@ def _zip_member(name, data):
     return info, data
 
 
-def build_zip(banks, revision, assets=None):
+def build_zip(banks, revision, assets=None, manifest=None):
     """Build a deterministic Yomitan ZIP (bytes) with all members at the root.
 
     `assets` is an optional {path: text} map of extra bundled files (e.g.
-    sanitized KanjiVG SVGs under kanjivg/). styles.css is always bundled; the
+    sanitized KanjiVG SVGs under kanjivg/). `manifest` is an optional
+    source/revision manifest dict (see build_manifest) bundled as MANIFEST.json
+    so provenance travels inside the package. styles.css is always bundled; the
     KanjiVG licence notice is bundled only when KanjiVG-derived assets ship, to
     honour the share-alike obligation for exactly what is redistributed. Member
     order, timestamps, and permissions are fixed so two builds from identical
@@ -1246,6 +1312,8 @@ def build_zip(banks, revision, assets=None):
     """
     assets = assets or {}
     members = [("index.json", dump_json(build_index(revision)))]
+    if manifest is not None:
+        members.append(("MANIFEST.json", dump_json(manifest)))
     for filename, key in BANK_FILES:
         members.append((filename, dump_json(banks[key])))
     members.append(("styles.css", STYLES_CSS))
@@ -1623,6 +1691,26 @@ def _load_previous(dist_index_path):
     return prev_rev, prev_hash
 
 
+def _code_revision():
+    """Return the short git revision of the generator, or 'unknown'.
+
+    Deterministic within a single checkout; recorded in the manifest so a
+    published release is traceable back to the exact code that produced it.
+    """
+    import pathlib as _pl
+    import subprocess as _sp
+
+    root = _pl.Path(__file__).resolve().parent.parent
+    try:
+        out = _sp.check_output(
+            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            stderr=_sp.DEVNULL,
+        )
+        return out.decode("utf-8").strip() or "unknown"
+    except (OSError, _sp.CalledProcessError):
+        return "unknown"
+
+
 def main(argv=None):
     """Single command: fetch/refresh -> normalize -> validate -> build.
 
@@ -1692,12 +1780,35 @@ def main(argv=None):
         print("[build] content unchanged; nothing to publish")
         return 0
 
-    zip_bytes = build_zip(result["banks"], revision, enr.get("assets"))
+    manifest = build_manifest(
+        revision=revision,
+        content_hash=result["content_hash"],
+        date=date,
+        source_counts=sc,
+        enrichment_counts={
+            "strokes": len(enr["strokes"]),
+            "families": len(enr["families"]),
+            "assets": len(enr.get("assets") or {}),
+        },
+        sitemap_size=len(characters),
+        code_revision=_code_revision(),
+    )
+
+    zip_bytes = build_zip(result["banks"], revision, enr.get("assets"), manifest=manifest)
     zip_path = out_dir / ZIP_NAME
     zip_path.write_bytes(zip_bytes)
 
+    # Emit the manifest as a standalone release asset too, byte-identical to the
+    # bundled MANIFEST.json member, so its SHA256SUMS line verifies either copy.
+    manifest_text = dump_json(manifest)
+    (out_dir / "MANIFEST.json").write_text(manifest_text, encoding="utf-8")
+    manifest_digest = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+
     digest = hashlib.sha256(zip_bytes).hexdigest()
-    (out_dir / "SHA256SUMS").write_text(f"{digest}  {ZIP_NAME}\n", encoding="utf-8")
+    (out_dir / "SHA256SUMS").write_text(
+        f"{digest}  {ZIP_NAME}\n{manifest_digest}  MANIFEST.json\n",
+        encoding="utf-8",
+    )
 
     (dist_dir / "index.json").write_text(
         dump_json(build_index(revision)) + "\n", encoding="utf-8"

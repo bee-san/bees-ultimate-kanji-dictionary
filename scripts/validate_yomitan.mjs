@@ -38,6 +38,7 @@ if (!zipPath) {
 // Members that MUST live at the ZIP root.
 const EXPECTED_ROOT = [
   "index.json",
+  "MANIFEST.json",
   "term_bank_1.json",
   "term_meta_bank_1.json",
   "kanji_bank_1.json",
@@ -135,6 +136,29 @@ if (nameSet.has("term_bank_1.json")) {
     }
   }
   console.log(`OK: ${referenced.size} referenced img assets all resolve`);
+}
+
+// The source/revision manifest must be present, valid JSON, and carry the core
+// provenance fields so a released package is always traceable to its sources.
+if (nameSet.has("MANIFEST.json")) {
+  try {
+    const m = JSON.parse(zip.readAsText("MANIFEST.json"));
+    for (const field of ["revision", "contentHash", "buildDate", "sources", "records"]) {
+      if (!(field in m)) {
+        console.error(`FAIL: MANIFEST.json missing field: ${field}`);
+        ok = false;
+      }
+    }
+    if (m.sources && (!m.sources.jiten || !m.sources.kanjidic2)) {
+      console.error("FAIL: MANIFEST.json missing source provenance (jiten/kanjidic2)");
+      ok = false;
+    } else {
+      console.log("OK: MANIFEST.json carries revision + source provenance");
+    }
+  } catch (e) {
+    console.error(`FAIL: MANIFEST.json is not valid JSON: ${e.message}`);
+    ok = false;
+  }
 }
 
 if (!ok) {

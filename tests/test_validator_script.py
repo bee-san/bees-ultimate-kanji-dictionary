@@ -46,13 +46,22 @@ def _enriched():
     return banks, enr
 
 
+def _manifest(rev="2026.08.16"):
+    return bk.build_manifest(
+        revision=rev, content_hash="0" * 64, date="2026-08-16",
+        source_counts={"jiten": len(CHARS), "kanjidic2": 0},
+        enrichment_counts={"strokes": 0, "families": 0, "assets": 0},
+        sitemap_size=len(CHARS), code_revision="testrev",
+    )
+
+
 def test_node_validator_accepts_built_zip(tmp_path):
     if shutil.which("node") is None:
         pytest.skip("node not available")
     if not (ROOT / "node_modules" / "ajv").exists():
         pytest.skip("node_modules not installed")
     zip_path = tmp_path / bk.ZIP_NAME
-    zip_path.write_bytes(bk.build_zip(_banks(), "2026.08.16"))
+    zip_path.write_bytes(bk.build_zip(_banks(), "2026.08.16", manifest=_manifest()))
     proc = subprocess.run(
         ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
         capture_output=True, text=True,
@@ -68,7 +77,9 @@ def test_node_validator_accepts_enriched_zip_with_assets(tmp_path):
         pytest.skip("node_modules not installed")
     banks, enr = _enriched()
     zip_path = tmp_path / bk.ZIP_NAME
-    zip_path.write_bytes(bk.build_zip(banks, "2026.08.16", assets=enr["assets"]))
+    zip_path.write_bytes(
+        bk.build_zip(banks, "2026.08.16", assets=enr["assets"], manifest=_manifest())
+    )
     proc = subprocess.run(
         ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
         capture_output=True, text=True,
