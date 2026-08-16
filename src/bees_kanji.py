@@ -8,6 +8,10 @@ import hashlib
 import io
 import json
 import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 
 # --- Reading normalization ---------------------------------------------------
@@ -552,3 +556,94 @@ def build_zip(banks, revision):
             info, data = _zip_member(name, text.encode("utf-8"))
             zf.writestr(info, data)
     return buf.getvalue()
+
+
+# --- Daily acquisition with a resumable per-character cache ------------------
+
+API_BASE = "https://api.jiten.moe/api/kanji"
+SITEMAP_URL = f"{API_BASE}/sitemap-characters"
+USER_AGENT = "bees-ultimate-kanji-dictionary (+https://github.com/bee-san/bees-ultimate-kanji-dictionary)"
+TIMEOUT_SECONDS = 30
+MAX_RETRIES = 2  # bounded retries for transport / 429 / 5xx only
+
+
+class NotFound(Exception):
+    """The Jiten API returned 404 for a character (skip it)."""
+
+
+def cache_filename(character):
+    """Filesystem-safe cache filename for a character (by code points)."""
+    codepoints = "_".join(f"{ord(c):x}" for c in character)
+    return f"{codepoints}.json"
+
+
+def http_get_json(url):
+    """GET a URL and parse JSON, with bounded retries for transient errors.
+
+    Raises NotFound on 404. Retries only transport errors, 429, and 5xx.
+    """
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    last_err = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise NotFound(url) from e
+            if e.code == 429 or 500 <= e.code < 600:
+                last_err = e
+            else:
+                raise
+        except urllib.error.URLError as e:
+            last_err = e
+        if attempt < MAX_RETRIES:
+            time.sleep(2 ** attempt)  # small backoff: 1s, 2s
+    raise last_err if last_err is not None else RuntimeError(f"failed to GET {url}")
+
+
+def fetch_kanji(character):
+    """Fetch a single kanji payload from the live Jiten API."""
+    return http_get_json(f"{API_BASE}/{urllib.parse.quote(character)}")
+
+
+def fetch_sitemap():
+    """Fetch the list of characters from the Jiten sitemap endpoint."""
+    data = http_get_json(SITEMAP_URL)
+    if not isinstance(data, list):
+        raise MalformedPayload("sitemap is not a list")
+    return [c for c in data if isinstance(c, str) and c]
+
+
+def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
+    """Fetch payloads for characters, using a resumable dated on-disk cache.
+
+    Cache layout: cache_dir/DATE/<codepoints>.json. Files already present for
+    DATE are reused (no fetcher call). Only missing characters are fetched
+    sequentially. 404s are skipped (not cached, not returned). Returns an
+    ordered dict {character: payload} for the characters that produced data.
+    """
+    import pathlib as _pl
+
+    day_dir = _pl.Path(cache_dir) / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+
+    out = {}
+    for char in characters:
+        path = day_dir / cache_filename(char)
+        if path.exists():
+            try:
+                out[char] = json.loads(path.read_text(encoding="utf-8"))
+                continue
+            except (ValueError, OSError):
+                pass  # corrupt cache file -> refetch
+        try:
+            payload = fetcher(char)
+        except NotFound:
+            continue  # skip 404s
+        # atomic-ish write: temp then replace
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        out[char] = payload
+    return out
