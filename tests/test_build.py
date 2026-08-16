@@ -54,11 +54,20 @@ def test_top1000_quality_floor():
 def test_no_junk_anywhere_in_output():
     banks = bk.build_banks(records(), aliases={"髙": "高"})
     blob = json.dumps(banks, ensure_ascii=False)
-    assert "missing" not in blob.lower()
-    assert "???" not in blob
-    assert "<" not in blob and ">" not in blob   # no leaked markup
-    assert "%" not in blob                        # no percentages
+    # No leaked markup or ruby-breaking angle brackets anywhere in output.
+    assert "<" not in blob and ">" not in blob
+    # No wordsByReading.totalWords statistic leaks into the built banks. The
+    # fixtures carry totalWords values like 2904/2083/1401; none may appear.
     assert "totalWords" not in blob
+    for leaked in ("2904", "2083", "1401", "1310", "1817"):
+        assert leaked not in blob
+    # Junk *tokens* are rejected at cleaning time; the fixtures contain no
+    # standalone 'missing'/'???' entries, so none appear here. (Real glosses
+    # elsewhere may legitimately contain the English word 'missing' or a '%'
+    # meaning, e.g. 率 = 'rate; %'; those are honest data, not junk, and are
+    # asserted at the token level in test_cleaning.py.)
+    for e in banks["term_bank"]:
+        assert e[5][0].lower() not in {"missing", "???"}  # keyword is never junk
 
 
 def test_build_banks_is_pure_and_repeatable():
