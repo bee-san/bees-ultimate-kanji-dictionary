@@ -276,3 +276,144 @@ def normalize_record(payload):
         "jlpt": _int_or_none(payload.get("jlptLevel")),
         "examples": _select_examples(payload, on, kun),
     }
+
+
+# --- Yomitan bank builders ---------------------------------------------------
+
+def _jlpt_label(level):
+    """Map a numeric JLPT level to Yomitan-style 'N#', else None."""
+    if isinstance(level, int) and 1 <= level <= 5:
+        return f"N{level}"
+    return None
+
+
+def _ruby_node(segments):
+    """Build a structured-content node for one furigana word from ruby segs."""
+    content = []
+    for base, reading in segments:
+        if reading:
+            content.append({"tag": "ruby", "content": [base, {"tag": "rt", "content": reading}]})
+        else:
+            content.append(base)
+    return content
+
+
+def _detail_content(record):
+    """Build the structured-content body for a term entry's detail item."""
+    body = []
+
+    # Readings line: honest On / Kun lists as supplied.
+    reading_bits = []
+    if record["on"]:
+        reading_bits.append("On: " + "、".join(record["on"]))
+    if record["kun"]:
+        reading_bits.append("Kun: " + "、".join(record["kun"]))
+    if reading_bits:
+        body.append({"tag": "div", "content": " / ".join(reading_bits)})
+
+    # Senses line: compact common meanings.
+    if record["senses"]:
+        body.append({"tag": "div", "content": "; ".join(record["senses"])})
+
+    # Facts line: rank / grade / jlpt / strokes (only known values).
+    facts = []
+    if record["frequency_rank"] is not None:
+        facts.append(f"Rank {record['frequency_rank']}")
+    if record["grade"] is not None:
+        facts.append(f"Grade {record['grade']}")
+    jl = _jlpt_label(record["jlpt"])
+    if jl:
+        facts.append(f"JLPT {jl}")
+    if record["stroke_count"] is not None:
+        facts.append(f"{record['stroke_count']} strokes")
+    if facts:
+        body.append({"tag": "div", "content": " · ".join(facts)})
+
+    # Example words grouped by reading with honest On/Kun/Other labels.
+    for group in record["examples"]:
+        items = []
+        for ex in group["words"]:
+            line = _ruby_node(ex["ruby"]) + [" — " + ex["gloss"]]
+            items.append({"tag": "li", "content": line})
+        if items:
+            body.append({"tag": "div", "content": group["label"]})
+            body.append({"tag": "ul", "content": items})
+
+    return body
+
+
+def build_term_entry(record):
+    """Build one Yomitan term-bank entry for a normalized kanji record."""
+    keyword = record["keyword"] or record["character"]
+    glossary = [
+        keyword,
+        {"type": "structured-content", "content": _detail_content(record)},
+    ]
+    return [
+        record["character"],   # expression
+        "",                    # reading: empty for a multi-reading kanji
+        "",                    # definition tags
+        "",                    # rule identifiers
+        0,                     # score (neutral)
+        glossary,
+        ord(record["character"]),  # sequence = Unicode code point
+        "",                    # term tags
+    ]
+
+
+def build_kanji_entry(record):
+    """Build one Yomitan kanji-bank native entry for a normalized record."""
+    stats = {}
+    if record["frequency_rank"] is not None:
+        stats["Frequency rank"] = str(record["frequency_rank"])
+    if record["grade"] is not None:
+        stats["Grade"] = str(record["grade"])
+    jl = _jlpt_label(record["jlpt"])
+    if jl:
+        stats["JLPT"] = jl
+    if record["stroke_count"] is not None:
+        stats["Strokes"] = str(record["stroke_count"])
+    return [
+        record["character"],
+        " ".join(record["on"]),
+        " ".join(record["kun"]),
+        "",                    # tags
+        list(record["senses"]),
+        stats,
+    ]
+
+
+def build_term_meta(record):
+    """Frequency meta for the term bank, or None when rank is unknown."""
+    if record["frequency_rank"] is None:
+        return None
+    return [record["character"], "freq", record["frequency_rank"]]
+
+
+def build_kanji_meta(record):
+    """Frequency meta for the kanji bank, or None when rank is unknown."""
+    if record["frequency_rank"] is None:
+        return None
+    return [record["character"], "freq", record["frequency_rank"]]
+
+
+def build_alias_term_entry(alias, canonical):
+    """Build a term-only alias entry pointing an old form to its canonical form.
+
+    Used for compatibility characters Jiten does not serve (e.g. 髙 -> 高).
+    Contributes no native-kanji or frequency data.
+    """
+    detail = {
+        "type": "structured-content",
+        "content": [{"tag": "div", "content": f"Variant form of {canonical}"}],
+    }
+    return [
+        alias,
+        "",
+        "",
+        "",
+        0,
+        [f"variant of {canonical}", detail],
+        ord(alias),
+        "",
+    ]
