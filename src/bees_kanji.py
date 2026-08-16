@@ -286,6 +286,186 @@ def normalize_record(payload):
     }
 
 
+# --- Reading-distribution donut ----------------------------------------------
+
+# At most this many labelled donut segments; any tail collapses into "Other".
+MAX_DONUT_SEGMENTS = 5
+
+# Accessible, colour-blind-distinguishable palette (Okabe-Ito derived). Order is
+# stable so identical inputs always produce identical colours.
+_DONUT_COLORS = [
+    "#0072b2",  # blue
+    "#d55e00",  # vermillion
+    "#009e73",  # green
+    "#cc79a7",  # reddish purple
+    "#e69f00",  # orange
+    "#767676",  # grey ("Other" / overflow)
+]
+_DONUT_OTHER_COLOR = "#767676"
+
+
+def _largest_remainder_percents(counts, total):
+    """Round counts to integer percents that sum to exactly 100.
+
+    Uses the largest-remainder method so the reported percentages are truthful
+    (each within 1 of its exact share) and always total 100. Ties break on the
+    original index for deterministic output.
+    """
+    if total <= 0 or not counts:
+        return []
+    exact = [c * 100.0 / total for c in counts]
+    floors = [int(x) for x in exact]
+    remainder = 100 - sum(floors)
+    order = sorted(range(len(counts)), key=lambda i: (-(exact[i] - floors[i]), i))
+    for i in order[: max(0, remainder)]:
+        floors[i] += 1
+    return floors
+
+
+def reading_distribution(record):
+    """Compute a truthful reading-class distribution over the entry's examples.
+
+    Counts the example words ACTUALLY shown in this entry, grouped by their
+    honest reading class (On / Kun / Other) -- never Jiten's totalWords. Returns
+    {"total": N, "segments": [{"label","count","percent","color"}, ...]} with at
+    most MAX_DONUT_SEGMENTS segments; any tail collapses into one explicit
+    "Other" segment. Percentages are integers summing to 100.
+    """
+    tally = {}
+    order = []
+    for group in record.get("examples") or []:
+        label = group.get("label") or group.get("reading_class") or "Other"
+        n = len(group.get("words") or [])
+        if n == 0:
+            continue
+        if label not in tally:
+            tally[label] = 0
+            order.append(label)
+        tally[label] += n
+
+    total = sum(tally.values())
+    if total == 0:
+        return {"total": 0, "segments": []}
+
+    # Sort labels by count (descending), then by first-seen order for stability.
+    ranked = sorted(order, key=lambda lbl: (-tally[lbl], order.index(lbl)))
+
+    # Cap: keep the top (MAX_DONUT_SEGMENTS - 1) then collapse the rest to Other,
+    # but only collapse when there is genuinely a tail to fold.
+    kept = []
+    overflow = 0
+    if len(ranked) > MAX_DONUT_SEGMENTS:
+        head = ranked[: MAX_DONUT_SEGMENTS - 1]
+        tail = ranked[MAX_DONUT_SEGMENTS - 1:]
+        kept = [(lbl, tally[lbl]) for lbl in head]
+        overflow = sum(tally[lbl] for lbl in tail)
+    else:
+        kept = [(lbl, tally[lbl]) for lbl in ranked]
+
+    labels = [lbl for lbl, _ in kept]
+    counts = [c for _, c in kept]
+    has_explicit_other = False
+    if overflow:
+        # Fold overflow into an existing "Other" segment if present, else add one.
+        if "Other" in labels:
+            counts[labels.index("Other")] += overflow
+        else:
+            labels.append("Other")
+            counts.append(overflow)
+        has_explicit_other = True
+
+    percents = _largest_remainder_percents(counts, total)
+    segments = []
+    color_i = 0
+    for lbl, cnt, pct in zip(labels, counts, percents):
+        if lbl == "Other":
+            color = _DONUT_OTHER_COLOR
+        else:
+            color = _DONUT_COLORS[color_i % (len(_DONUT_COLORS) - 1)]
+            color_i += 1
+        segments.append({"label": lbl, "count": cnt, "percent": pct, "color": color})
+    # mark whether a collapse happened (useful for tests / callers)
+    return {"total": total, "segments": segments, "collapsed": has_explicit_other}
+
+
+def _conic_gradient(segments):
+    """Build a deterministic CSS conic-gradient value from ordered segments."""
+    stops = []
+    acc = 0
+    for seg in segments:
+        start = acc
+        acc += seg["percent"]
+        stops.append(f"{seg['color']} {start}% {acc}%")
+    return "conic-gradient(" + ", ".join(stops) + ")"
+
+
+def build_donut_node(record):
+    """Build an accessible reading-distribution donut structured-content node.
+
+    The donut ring is a CSS conic-gradient (deterministic, no per-entry asset)
+    with a hole punched by a centred disc; it carries an aria-label so it is
+    described to assistive tech. A visible text legend lists every segment with
+    its label, count, and truthful percentage so NOTHING depends on colour, SVG,
+    or CSS alone. Returns None when the entry has no example words.
+    """
+    dist = reading_distribution(record)
+    if dist["total"] == 0:
+        return None
+    segments = dist["segments"]
+
+    aria = "Reading distribution: " + ", ".join(
+        f"{s['label']} {s['percent']} percent ({s['count']})" for s in segments
+    )
+
+    # Donut ring: a coloured conic-gradient disc with a centred hole. The
+    # conic-gradient BACKGROUND is data-driven (per entry) so it must be inline;
+    # all sizing/shape lives in the bundled styles.css keyed on data-sc-bee-role.
+    # Marked aria-hidden because the legend below carries the same info as text.
+    ring = {
+        "tag": "div",
+        "data": {"beeRole": "donut-ring", "ariaHidden": "true"},
+        "style": {"background": _conic_gradient(segments)},
+        "content": {
+            "tag": "div",
+            "data": {"beeRole": "donut-hole"},
+            "content": "",
+        },
+    }
+
+    # Visible text legend: colour swatch + label + count + truthful percent.
+    legend_items = []
+    for s in segments:
+        swatch = {
+            "tag": "span",
+            "data": {"beeRole": "donut-swatch", "ariaHidden": "true"},
+            # colour is data-driven; the glyph keeps the swatch visible with no CSS
+            "style": {"background": s["color"], "color": s["color"]},
+            "content": "\u25a0",  # filled square, visible even without CSS colour
+        }
+        legend_items.append({
+            "tag": "li",
+            "content": [swatch, f"{s['label']}: {s['percent']}% ({s['count']})"],
+        })
+
+    legend = {
+        "tag": "ul",
+        "data": {"beeRole": "donut-legend"},
+        "content": legend_items,
+    }
+
+    return {
+        "tag": "div",
+        "data": {"beeRole": "reading-donut"},
+        "lang": "en",
+        "title": aria,
+        "content": [
+            {"tag": "div", "data": {"beeRole": "donut-graphic", "ariaLabel": aria},
+             "content": [ring]},
+            legend,
+        ],
+    }
+
+
 # --- Yomitan bank builders ---------------------------------------------------
 
 def _jlpt_label(level):
