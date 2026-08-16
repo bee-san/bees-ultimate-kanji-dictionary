@@ -51,10 +51,82 @@ def test_examples_selected_by_word_rank_not_totalwords():
     ordered_readings = [g["reading"] for g in rec["examples"]]
     assert ordered_readings[0] == "おとこ"
     assert "お" not in ordered_readings
-    # No group exposes totalWords as a statistic/percentage.
+    # The selected example groups themselves must NOT carry totalWords-derived
+    # counts/percentages; the reading share lives on the record, not per example.
     for g in rec["examples"]:
         assert "total_words" not in g
         assert "percent" not in g
+
+
+def test_reading_entry_counts_capture_full_totalwords_not_shown_examples():
+    # 場: the full Jiten group totals are じょう=2904, ば=2083, えき=1 (T=4988),
+    # regardless of the 1-2 example words actually shown. normalize_record must
+    # retain those complete counts as a deterministic record field so the
+    # distribution can use them instead of the shown-example count.
+    rec = bk.normalize_record(load("場.json"))
+    counts = rec["reading_entry_counts"]
+    assert isinstance(counts, list)
+    as_map = {c["reading"]: c["count"] for c in counts}
+    assert as_map == {"じょう": 2904, "ば": 2083, "えき": 1}
+    assert sum(c["count"] for c in counts) == 4988
+    # each retained count is annotated with its On/Kun/Other class as secondary
+    # text -- never used as the aggregation key.
+    for c in counts:
+        assert c["reading_class"] in {"On", "Kun", "Other"}
+
+
+def test_reading_entry_counts_use_all_28_groups_for_sei():
+    # 生 has 28 valid positive groups summing to 3922 -- the field must retain
+    # every one, proving the statistic does not depend on the 6 shown examples.
+    rec = bk.normalize_record(load("生.json"))
+    counts = rec["reading_entry_counts"]
+    assert len(counts) == 28
+    assert sum(c["count"] for c in counts) == 3922
+    assert {c["reading"]: c["count"] for c in counts}["せい"] == 1817
+
+
+def test_reading_entry_counts_reject_invalid_totals():
+    # Only integers > 0 count. Booleans, missing, zero, negative, string,
+    # float, and non-finite values are rejected; a group with no valid total
+    # contributes nothing.
+    payload = {
+        "character": "X",
+        "onReadings": [],
+        "kunReadings": [],
+        "meanings": ["x"],
+        "wordsByReading": [
+            {"reading": "あ", "totalWords": 5},
+            {"reading": "い", "totalWords": 0},
+            {"reading": "う", "totalWords": -3},
+            {"reading": "え", "totalWords": True},
+            {"reading": "お", "totalWords": "12"},
+            {"reading": "か", "totalWords": 2.5},
+            {"reading": "き"},  # missing
+        ],
+    }
+    rec = bk.normalize_record(payload)
+    as_map = {c["reading"]: c["count"] for c in rec["reading_entry_counts"]}
+    assert as_map == {"あ": 5}
+
+
+def test_reading_entry_counts_aggregate_duplicate_normalized_labels():
+    # Katakana on-reading groups normalize to the same hiragana stem as a
+    # hiragana group; their totals must aggregate under the single label,
+    # never deduplicate away one of them.
+    payload = {
+        "character": "X",
+        "onReadings": [],
+        "kunReadings": [],
+        "meanings": ["x"],
+        "wordsByReading": [
+            {"reading": "ジョウ", "totalWords": 100},
+            {"reading": "じょう", "totalWords": 5},
+            {"reading": "ば", "totalWords": 20},
+        ],
+    }
+    rec = bk.normalize_record(payload)
+    as_map = {c["reading"]: c["count"] for c in rec["reading_entry_counts"]}
+    assert as_map == {"じょう": 105, "ば": 20}
 
 
 def test_example_group_and_count_limits():

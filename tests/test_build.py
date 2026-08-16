@@ -56,11 +56,17 @@ def test_no_junk_anywhere_in_output():
     blob = json.dumps(banks, ensure_ascii=False)
     # No leaked markup or ruby-breaking angle brackets anywhere in output.
     assert "<" not in blob and ">" not in blob
-    # No wordsByReading.totalWords statistic leaks into the built banks. The
-    # fixtures carry totalWords values like 2904/2083/1401; none may appear.
+    # The raw Jiten KEY names must never leak into the built banks. The labelled
+    # reading-share statistic MAY legitimately carry normalized group counts
+    # (e.g. "2,904 entries") as truthful text -- that is the whole point of the
+    # corrected donut -- so we guard the key names, not the count values.
     assert "totalWords" not in blob
-    for leaked in ("2904", "2083", "1401", "1310", "1817"):
-        assert leaked not in blob
+    assert "total_words" not in blob
+    # ...and the honest statistic is what surfaces those counts: every count that
+    # appears beside a percent is a real reading_entry_counts value.
+    for r in records():
+        for seg in bk.reading_distribution(r)["segments"]:
+            assert f"{seg['percent']}% ({seg['count']:,} entries)" in blob
     # Junk *tokens* are rejected at cleaning time; the fixtures contain no
     # standalone 'missing'/'???' entries, so none appear here. (Real glosses
     # elsewhere may legitimately contain the English word 'missing' or a '%'

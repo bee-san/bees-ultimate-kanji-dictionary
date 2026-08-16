@@ -31,23 +31,24 @@ def test_term_bank_entry_shape_for_ba():
     assert entry[6] == ord("場")     # sequence = code point
 
 
-def test_term_detail_has_no_totalwords_and_only_truthful_percentages():
+def test_term_detail_uses_full_jiten_reading_share_denominator():
     r = rec("場.json")
     entry = bk.build_term_entry(r)
     blob = json.dumps(entry, ensure_ascii=False)
-    # No Jiten totalWords key or its raw counts may ever leak into an entry.
+    # The raw Jiten KEY names must never leak, but the labelled reading-share
+    # statistic legitimately carries the normalized group counts as text.
     assert "totalWords" not in blob and "total_words" not in blob
-    assert "2904" not in blob and "2083" not in blob  # the totalWords values
-    # Percentages that DO appear are the truthful reading-distribution donut,
-    # computed over the shown examples -- each segment count is small and real,
-    # never a totalWords-derived statistic. Verify every donut percent matches
-    # the honest recomputation from the entry's own examples.
+    # The donut is a share of Jiten vocabulary ENTRIES computed over the full
+    # group totals (denominator 4988), NOT the 1-2 shown example words.
     dist = bk.reading_distribution(r)
-    shown = sum(len(g["words"]) for g in r["examples"])
-    assert sum(s["count"] for s in dist["segments"]) == shown
-    assert sum(s["percent"] for s in dist["segments"]) == 100 if shown else True
+    assert dist["total"] == 4988
+    assert sum(s["count"] for s in dist["segments"]) == 4988
+    # every visible legend line matches the honest full-payload count + percent
     for seg in dist["segments"]:
-        assert f"{seg['percent']}% ({seg['count']})" in blob
+        assert f"{seg['percent']}% ({seg['count']:,} entries)" in blob
+    # the truthful title and non-occurrence disclaimer are present
+    assert "Share of Jiten vocabulary entries by reading" in blob
+    assert bk.DONUT_DISCLAIMER in blob
 
 
 def test_kanji_bank_entry_shape_for_ba():

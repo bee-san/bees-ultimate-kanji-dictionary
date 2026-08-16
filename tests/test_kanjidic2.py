@@ -74,6 +74,8 @@ def test_kanjidic2_only_char_yields_clean_fallback_record():
     # honest omissions: no rank, no examples (nothing Jiten-derived invented)
     assert rec["frequency_rank"] is None
     assert rec["examples"] == []
+    # no reading-share statistic can be fabricated for a fallback-only record
+    assert rec["reading_entry_counts"] == []
     assert rec["grade"] is None
     assert rec["jlpt"] is None
 
@@ -117,6 +119,7 @@ def test_merge_jiten_wins_on_duplicate_characters():
     assert ba["keyword"] == "location"
     assert ba["frequency_rank"] == 57            # Jiten's rank, not KD2 freq 52
     assert ba["examples"]                        # Jiten examples intact
+    assert ba["reading_entry_counts"]            # full reading counts preserved
     assert "WRONG-SHOULD-NOT-WIN" not in json.dumps(ba, ensure_ascii=False)
 
 

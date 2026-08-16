@@ -37,13 +37,17 @@ def test_term_entry_without_enrichment_matches_legacy_shape():
     assert detail["type"] == "structured-content"
 
 
-def test_term_entry_embeds_donut_when_examples_present():
-    r = rec("\u751f.json")  # 生 has examples
+def test_term_entry_embeds_donut_when_reading_counts_present():
+    r = rec("\u751f.json")  # 生 has full wordsByReading group totals
     entry = bk.build_term_entry(r, enrichment=None)
     blob = json.dumps(entry, ensure_ascii=False)
-    # donut legend renders truthful percentages from the shown examples
+    # donut renders the truthful share of Jiten vocabulary entries by reading,
+    # computed over the complete group totals (denominator 3922), NOT examples
     assert "reading-donut" in blob
     assert "%" in blob
+    assert "Share of Jiten vocabulary entries by reading" in blob
+    assert bk.DONUT_DISCLAIMER in blob
+    assert bk.reading_distribution(r)["total"] == 3922
 
 
 def test_term_entry_embeds_stroke_and_phonetic_when_enriched():

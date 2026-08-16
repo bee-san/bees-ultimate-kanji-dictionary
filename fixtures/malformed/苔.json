@@ -1,0 +1,29 @@
+{
+  "character": "苔",
+  "onReadings": ["タイ"],
+  "kunReadings": ["こけ"],
+  "meanings": ["moss"],
+  "strokeCount": 8,
+  "jlptLevel": null,
+  "grade": null,
+  "frequencyRank": 30000,
+  "topWords": [
+    {
+      "wordId": 900,
+      "readingIndex": 0,
+      "reading": "苔",
+      "readingFurigana": "苔[こけ]",
+      "mainDefinition": "moss",
+      "frequencyRank": 12000,
+      "matchSurface": null
+    }
+  ],
+  "wordsByReading": [
+    {"reading": "こけ", "totalWords": 0, "words": []},
+    {"reading": "たい", "totalWords": -5, "words": []},
+    {"reading": "ず", "totalWords": "12", "words": []},
+    {"reading": "ふ", "totalWords": 2.5, "words": []},
+    {"reading": "べ", "totalWords": true, "words": []},
+    {"reading": "ぼ", "words": []}
+  ]
+}

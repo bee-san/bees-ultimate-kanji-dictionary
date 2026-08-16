@@ -268,6 +268,54 @@ def _select_examples(payload, on, kun):
     return result
 
 
+def _reading_entry_counts(payload, on, kun):
+    """Extract the complete Jiten vocabulary-entry counts per reading group.
+
+    For every ``wordsByReading`` group, accept ``totalWords`` ONLY when it is a
+    genuine positive integer -- booleans, missing values, zero, negatives,
+    strings, floats, and non-finite values are all rejected. Counts are
+    aggregated by the NORMALIZED reading label (so katakana on-readings collapse
+    onto their hiragana stem and never silently drop a duplicate), never merely
+    by On/Kun/Other class. Each retained reading carries its class as secondary
+    text only. The result is deterministic: ordered by descending count, then
+    normalized reading, then first source position.
+
+    This is the complete Jiten group count (``TotalWords = g.Count()``), NOT the
+    handful of preview words in ``words`` and NOT the few examples selected for
+    display; it is the truthful denominator for the reading-share statistic.
+    """
+    counts = {}
+    order = {}
+    seen = 0
+    for grp in payload.get("wordsByReading") or []:
+        if not isinstance(grp, dict):
+            continue
+        total = grp.get("totalWords")
+        # reject bool (a subclass of int), non-int, and non-positive values
+        if isinstance(total, bool) or not isinstance(total, int) or total <= 0:
+            continue
+        reading = normalize_reading(grp.get("reading"))
+        if not reading:
+            continue
+        if reading not in counts:
+            counts[reading] = 0
+            order[reading] = seen
+            seen += 1
+        counts[reading] += total
+
+    ordered = sorted(
+        counts, key=lambda r: (-counts[r], r, order[r])
+    )
+    return [
+        {
+            "reading": r,
+            "count": counts[r],
+            "reading_class": classify_reading(r, on, kun),
+        }
+        for r in ordered
+    ]
+
+
 def normalize_record(payload):
     """Normalize a raw Jiten kanji payload into a clean record dict.
 
@@ -300,6 +348,7 @@ def normalize_record(payload):
         "grade": _int_or_none(payload.get("grade")),
         "jlpt": _int_or_none(payload.get("jlptLevel")),
         "examples": _select_examples(payload, on, kun),
+        "reading_entry_counts": _reading_entry_counts(payload, on, kun),
     }
 
 
@@ -410,6 +459,7 @@ def kanjidic2_record(character, fields):
         "grade": fields.get("grade"),
         "jlpt": fields.get("jlpt"),
         "examples": [],            # never invent example words
+        "reading_entry_counts": [],  # never fabricate a reading-share statistic
     }
 
 
@@ -470,69 +520,59 @@ def _largest_remainder_percents(counts, total):
 
 
 def reading_distribution(record):
-    """Compute a truthful reading-class distribution over the entry's examples.
+    """Compute the truthful share of Jiten vocabulary entries by reading.
 
-    Counts the example words ACTUALLY shown in this entry, grouped by their
-    honest reading class (On / Kun / Other) -- never Jiten's totalWords. Returns
-    {"total": N, "segments": [{"label","count","percent","color"}, ...]} with at
-    most MAX_DONUT_SEGMENTS segments; any tail collapses into one explicit
-    "Other" segment. Percentages are integers summing to 100.
+    Uses the COMPLETE Jiten group totals in ``record['reading_entry_counts']``
+    (each ``wordsByReading[].totalWords``, the full vocabulary-entry count for a
+    reading group) -- NEVER the 1-2 example words displayed in the entry. Each
+    segment keeps its actual reading plus its On/Kun/Other class as secondary
+    text. Segments are ordered by descending count, then normalized reading,
+    then first source position (already the order of reading_entry_counts). At
+    most ``MAX_DONUT_SEGMENTS`` segments: the top readings plus one explicit
+    "Other" segment folding the remaining tail. Percentages are integers summing
+    to exactly 100 via the largest-remainder method; the exact entry count rides
+    alongside so a nonzero tiny group rendered as 0%% stays explicit.
+
+    Returns {"total": N, "segments": [...]} with total 0 and no segments when no
+    valid positive group total exists -- the caller then omits the statistic
+    entirely rather than fabricating one from examples or ranks.
     """
-    tally = {}
-    order = []
-    for group in record.get("examples") or []:
-        label = group.get("label") or group.get("reading_class") or "Other"
-        n = len(group.get("words") or [])
-        if n == 0:
-            continue
-        if label not in tally:
-            tally[label] = 0
-            order.append(label)
-        tally[label] += n
-
-    total = sum(tally.values())
-    if total == 0:
+    counts = record.get("reading_entry_counts") or []
+    total = sum(c["count"] for c in counts)
+    if total <= 0 or not counts:
         return {"total": 0, "segments": []}
 
-    # Sort labels by count (descending), then by first-seen order for stability.
-    ranked = sorted(order, key=lambda lbl: (-tally[lbl], order.index(lbl)))
-
-    # Cap: keep the top (MAX_DONUT_SEGMENTS - 1) then collapse the rest to Other,
-    # but only collapse when there is genuinely a tail to fold.
-    kept = []
-    overflow = 0
-    if len(ranked) > MAX_DONUT_SEGMENTS:
-        head = ranked[: MAX_DONUT_SEGMENTS - 1]
-        tail = ranked[MAX_DONUT_SEGMENTS - 1:]
-        kept = [(lbl, tally[lbl]) for lbl in head]
-        overflow = sum(tally[lbl] for lbl in tail)
+    # counts is already deterministically ordered (desc count, reading, source).
+    if len(counts) > MAX_DONUT_SEGMENTS:
+        head = counts[: MAX_DONUT_SEGMENTS - 1]
+        tail = counts[MAX_DONUT_SEGMENTS - 1:]
+        kept = [(c["reading"], c["reading_class"], c["count"]) for c in head]
+        overflow = sum(c["count"] for c in tail)
+        kept.append(("", "Other", overflow))
+        collapsed = True
     else:
-        kept = [(lbl, tally[lbl]) for lbl in ranked]
+        kept = [(c["reading"], c["reading_class"], c["count"]) for c in counts]
+        collapsed = False
 
-    labels = [lbl for lbl, _ in kept]
-    counts = [c for _, c in kept]
-    has_explicit_other = False
-    if overflow:
-        # Fold overflow into an existing "Other" segment if present, else add one.
-        if "Other" in labels:
-            counts[labels.index("Other")] += overflow
-        else:
-            labels.append("Other")
-            counts.append(overflow)
-        has_explicit_other = True
+    seg_counts = [c for _, _, c in kept]
+    percents = _largest_remainder_percents(seg_counts, total)
 
-    percents = _largest_remainder_percents(counts, total)
     segments = []
     color_i = 0
-    for lbl, cnt, pct in zip(labels, counts, percents):
-        if lbl == "Other":
+    for (reading, cls, cnt), pct in zip(kept, percents):
+        if cls == "Other" and reading == "":
             color = _DONUT_OTHER_COLOR
         else:
             color = _DONUT_COLORS[color_i % (len(_DONUT_COLORS) - 1)]
             color_i += 1
-        segments.append({"label": lbl, "count": cnt, "percent": pct, "color": color})
-    # mark whether a collapse happened (useful for tests / callers)
-    return {"total": total, "segments": segments, "collapsed": has_explicit_other}
+        segments.append({
+            "reading": reading,
+            "reading_class": cls,
+            "count": cnt,
+            "percent": pct,
+            "color": color,
+        })
+    return {"total": total, "segments": segments, "collapsed": collapsed}
 
 
 def _conic_gradient(segments):
@@ -546,22 +586,45 @@ def _conic_gradient(segments):
     return "conic-gradient(" + ", ".join(stops) + ")"
 
 
+# Exact, contract-frozen truthful labelling. This statistic is a share of Jiten
+# VOCABULARY ENTRIES (form/reading links) by reading -- NOT corpus usage, token
+# frequency, pronunciation probability, or authoritative real-world frequency.
+DONUT_TITLE = "Share of Jiten vocabulary entries by reading"
+DONUT_DISCLAIMER = (
+    "Counts distinct Jiten vocabulary form/reading links, not occurrences in "
+    "text. Percentages are not usage frequency or the probability of a reading."
+)
+
+
+def _segment_label(segment):
+    """Human legend label for a segment: reading (Class) or plain Other."""
+    reading = segment.get("reading") or ""
+    cls = segment.get("reading_class") or "Other"
+    if not reading:
+        return "Other"
+    return f"{reading} ({cls})"
+
+
 def build_donut_node(record):
-    """Build an accessible reading-distribution donut structured-content node.
+    """Build an accessible reading-share donut structured-content node.
 
     The donut ring is a CSS conic-gradient (deterministic, no per-entry asset)
-    with a hole punched by a centred disc. A visible semantic list and container
-    title describe it to assistive tech. The legend lists every segment with
-    its label, count, and truthful percentage so NOTHING depends on colour, SVG,
-    or CSS alone. Returns None when the entry has no example words.
+    with a hole punched by a centred disc. A visible semantic list, container
+    title, and explicit non-occurrence disclaimer describe it to assistive tech.
+    The legend lists every segment with its actual reading, On/Kun/Other class,
+    truthful percentage, and EXACT entry count so nothing depends on colour,
+    SVG, or CSS alone -- and a nonzero tiny group rendered as 0%% still shows its
+    count. Returns None when the entry has no valid Jiten group total (the
+    statistic is omitted rather than faked from examples).
     """
     dist = reading_distribution(record)
     if dist["total"] == 0:
         return None
     segments = dist["segments"]
 
-    aria = "Reading distribution: " + ", ".join(
-        f"{s['label']} {s['percent']} percent ({s['count']})" for s in segments
+    aria = DONUT_TITLE + ": " + ", ".join(
+        f"{_segment_label(s)} {s['percent']} percent ({s['count']} entries)"
+        for s in segments
     )
 
     # Donut ring: a coloured conic-gradient disc with a centred hole. The
@@ -578,7 +641,8 @@ def build_donut_node(record):
         },
     }
 
-    # Visible text legend: colour swatch + label + count + truthful percent.
+    # Visible text legend: colour swatch + reading (class) + percent + exact
+    # entry count. Counts use a thousands separator for readability.
     legend_items = []
     for s in segments:
         swatch = {
@@ -590,7 +654,10 @@ def build_donut_node(record):
         }
         legend_items.append({
             "tag": "li",
-            "content": [swatch, f"{s['label']}: {s['percent']}% ({s['count']})"],
+            "content": [
+                swatch,
+                f"{_segment_label(s)}: {s['percent']}% ({s['count']:,} entries)",
+            ],
         })
 
     legend = {
@@ -599,15 +666,30 @@ def build_donut_node(record):
         "content": legend_items,
     }
 
+    # A visible caption states exactly what the statistic is, and a disclaimer
+    # rules out any misreading as usage frequency / pronunciation probability.
+    caption = {
+        "tag": "div",
+        "data": {"beeRole": "donut-caption"},
+        "content": DONUT_TITLE,
+    }
+    disclaimer = {
+        "tag": "div",
+        "data": {"beeRole": "donut-disclaimer"},
+        "content": DONUT_DISCLAIMER,
+    }
+
     return {
         "tag": "div",
         "data": {"beeRole": "reading-donut"},
         "lang": "en",
         "title": aria,
         "content": [
+            caption,
             {"tag": "div", "data": {"beeRole": "donut-graphic"},
              "content": [ring]},
             legend,
+            disclaimer,
         ],
     }
 
@@ -1122,9 +1204,11 @@ STYLES_CSS = """\
   outline-offset: 2px;
 }
 
-/* Reading-distribution donut: the ring is a conic-gradient disc (inline
-   background) with a punched hole; the visible legend carries the same data. */
+/* Reading-share donut: a share of Jiten vocabulary entries by reading. The ring
+   is a conic-gradient disc (inline background) with a punched hole; the visible
+   caption, legend, and disclaimer carry the same data as truthful text. */
 [data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
+[data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; }
 [data-sc-bee-role="donut-graphic"] { display: inline-block; vertical-align: middle; }
 [data-sc-bee-role="donut-ring"] {
   display: inline-block;
@@ -1157,6 +1241,11 @@ STYLES_CSS = """\
   margin-right: 0.4em;
   overflow: hidden;
   vertical-align: middle;
+}
+[data-sc-bee-role="donut-disclaimer"] {
+  font-size: 0.8em;
+  opacity: 0.7;
+  margin: 0.3em 0 0;
 }
 
 /* Phonetic family line: quiet, wraps gracefully. */
