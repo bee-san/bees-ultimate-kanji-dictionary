@@ -35,3 +35,43 @@ def test_releases_use_fresh_versioned_tags_and_require_immutability():
     assert 'test "$latest_tag" = "$release_tag"' in workflow
     assert 'test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"' in workflow
     assert 'cmp "build/$asset" "verify-published/$asset"' in workflow
+
+
+def test_daily_workflow_persists_and_reuses_same_day_acquisition_cache():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert "actions/cache/restore@" in workflow
+    assert "actions/cache/save@" in workflow
+    assert "cache/" in workflow
+    assert "kanjivg-cache/" in workflow
+    assert "kanjidic2-cache/" in workflow
+    assert "daily-cache-v1-${{ steps.date.outputs.date }}" in workflow
+
+
+def test_verified_draft_and_updater_commit_precede_public_immutable_release():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    verify_draft = workflow.index("(cd verify && sha256sum -c SHA256SUMS)")
+    publish = workflow.index('gh release edit "$release_tag" --draft=false --latest')
+    push_main = workflow.index('git push origin "HEAD:main"')
+    assert verify_draft < push_main < publish
+    assert 'git push origin "refs/tags/$release_tag:refs/tags/$release_tag"' in workflow[:publish]
+    pre_push = workflow[:push_main]
+    assert 'test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"' in pre_push
+    assert 'cmp "build/$asset" "verify/$asset"' in pre_push
+
+
+def test_release_retry_can_reuse_its_exact_tag_and_draft():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'test "$remote_tag_commit" = "$expected_commit"' in workflow
+    assert 'gh release view "$release_tag"' in workflow
+    assert 'gh release create "$release_tag"' in workflow
+    assert "recovery=true" in workflow
+    assert 'gh release download "$release_tag" --dir build' in workflow
+    assert "release_incomplete" in workflow
+    assert "release_immutable" in workflow
+    assert "gh release list" in workflow
+    assert 'test("^v[0-9]{4}' in workflow
+    assert "(cd build && sha256sum -c SHA256SUMS)" in workflow
+    assert 'gh release delete "$draft_tag" --yes --cleanup-tag' in workflow
+    assert "steps.build.outputs.recovery" in workflow
+    assert 'steps.check.outputs.recovery }}" != "true"' in workflow
+    assert 'gh release delete "$release_tag" --yes --cleanup-tag' in workflow

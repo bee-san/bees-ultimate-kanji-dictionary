@@ -32,6 +32,30 @@ def test_run_build_produces_banks_zip_and_hash(tmp_path):
     assert "髙" in exprs
 
 
+def test_run_build_fails_closed_when_top1000_entry_is_not_useful(tmp_path):
+    payload = offline_fetcher("場")
+    payload["frequencyRank"] = 1
+    payload["meanings"] = ["missing"]
+
+    def fetcher(_character):
+        return payload
+
+    import pytest
+
+    with pytest.raises(bk.MalformedPayload, match="Top-1000 quality floor"):
+        bk.run_build(["場"], tmp_path, "2026-08-16", fetcher=fetcher)
+
+
+def test_run_build_rejects_response_for_a_different_character(tmp_path):
+    def fetcher(_character):
+        return offline_fetcher("男")
+
+    import pytest
+
+    with pytest.raises(bk.MalformedPayload, match="requested 場"):
+        bk.run_build(["場"], tmp_path, "2026-08-16", fetcher=fetcher)
+
+
 def test_decide_revision_new_when_no_previous():
     rev = bk.decide_revision("abc", None, "2026-08-16", None)
     assert rev == "2026.08.16"

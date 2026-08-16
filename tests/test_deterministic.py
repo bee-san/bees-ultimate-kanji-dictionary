@@ -63,6 +63,29 @@ def test_content_hash_ignores_revision():
     assert isinstance(h1, str) and len(h1) == 64  # sha256 hex
 
 
+def test_content_hash_covers_revision_independent_shipped_metadata(monkeypatch):
+    b = banks()
+    baseline = bk.content_hash(b)
+
+    monkeypatch.setattr(bk, "STYLES_CSS", bk.STYLES_CSS + "\n/* changed */\n")
+    assert bk.content_hash(b) != baseline
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bk, "LICENSE_DATA_TEXT", bk.LICENSE_DATA_TEXT + "changed\n")
+    assert bk.content_hash(b) != baseline
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bk, "REPO", "bee-san/a-different-repository")
+    assert bk.content_hash(b) != baseline
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bk, "KANJIVG_REVISION", "different-pinned-revision")
+    assert bk.content_hash(b) != baseline
+
+    monkeypatch.undo()
+    assert bk.content_hash(b, source_counts={"jiten": 1}, sitemap_size=1) != baseline
+
+
 def test_zip_is_byte_identical_across_builds():
     b = banks()
     z1 = bk.build_zip(b, revision="2026.08.16")

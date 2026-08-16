@@ -113,3 +113,27 @@ def test_dirty_payload_cleans_meanings_and_examples():
             assert "<" not in ex["gloss"] and ">" not in ex["gloss"]
             assert ex["gloss"].lower() != "missing"
             assert ex["rank"] <= 25000
+
+
+def test_readings_are_cleaned_and_deduplicated_without_rewriting_valid_text():
+    payload = load("場.json")
+    payload["onReadings"] = [" ジョウ ", "missing", "ジョウ", "<b>チョウ</b>", None]
+    payload["kunReadings"] = ["ば", "???", " ば ", ""]
+
+    rec = bk.normalize_record(payload)
+
+    assert rec["on"] == ["ジョウ"]
+    assert rec["kun"] == ["ば"]
+
+
+def test_scalar_reading_and_meaning_fields_are_rejected_as_malformed_containers():
+    payload = load("場.json")
+    payload["meanings"] = "place"
+    payload["onReadings"] = "ジョウ"
+    payload["kunReadings"] = "ば"
+
+    rec = bk.normalize_record(payload)
+
+    assert rec["senses"] == []
+    assert rec["on"] == []
+    assert rec["kun"] == []

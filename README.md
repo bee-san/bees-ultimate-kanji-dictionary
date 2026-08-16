@@ -117,9 +117,9 @@ canonical ZIP** — no Core/Standard/Extended editions.
 fields this dictionary surfaces from KANJIDIC2 — English meanings, on/kun readings,
 stroke count, and grade/JLPT when present — and honestly omit everything Jiten
 would have supplied: no example vocabulary, no frequency rank or frequency-bank
-entry, no reading-distribution donut, and no phonetic family or Jiten
-attribution. Where a KanjiVG stroke diagram exists it is still attached (that is
-KanjiVG data, not Jiten's). Jiten always wins on a shared character, so its
+entry, no reading-distribution donut, and no Jiten attribution. Where KanjiVG
+supplies them, stroke diagrams and source-marked phonetic families can still be
+attached (that is KanjiVG data, not Jiten's). Jiten always wins on a shared character, so its
 enriched entry is never weakened or overwritten.
 
 ## Updating
@@ -165,8 +165,9 @@ Each `latest` release exposes exactly three files, and nothing else:
 - **KANJIDIC2 fallback entries are plain.** Characters Jiten does not serve
   carry only what this dictionary surfaces from KANJIDIC2 (meanings, on/kun, stroke count,
   grade/JLPT) — no example vocabulary, no frequency rank or frequency-bank
-  entry, no reading-distribution donut, and no phonetic family. A KanjiVG stroke
-  diagram is attached only where KanjiVG has one.
+  entry, and no reading-distribution donut. KanjiVG-derived stroke diagrams and
+  source-marked phonetic families can still appear where KanjiVG supplies them;
+  they never imply that Jiten supplied enrichment for the fallback entry.
 - **No audio and no pitch accent** anywhere, including the Anki templates.
 - **Data is only as fresh as its sources.** Jiten, KANJIDIC2, and KanjiVG are
   fetched at most once per UTC day; a new release appears only when the

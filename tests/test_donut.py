@@ -85,8 +85,11 @@ def test_donut_node_has_text_legend_and_semantic_fallback():
     dist = bk.reading_distribution(r)
     for seg in dist["segments"]:
         assert seg["label"] in blob
-    # accessible: the graphic carries a text alternative via data/aria label
-    assert "aria-label" in blob or "reading distribution" in blob.lower()
+    # Accessible without pretending custom data keys are ARIA attributes: the
+    # container has a textual title and the full distribution is a real list.
+    assert "reading distribution" in blob.lower()
+    assert '"tag": "ul"' in blob
+    assert "ariaLabel" not in blob and "ariaHidden" not in blob
 
 
 def test_donut_node_absent_when_no_examples():

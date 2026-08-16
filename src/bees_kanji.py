@@ -88,6 +88,8 @@ def clean_text(text):
 
 def clean_meanings(meanings):
     """Clean a list of meanings: drop junk, dedupe, preserve first-seen order."""
+    if not isinstance(meanings, (list, tuple)):
+        return []
     out = []
     seen = set()
     for m in meanings or []:
@@ -96,6 +98,21 @@ def clean_meanings(meanings):
             continue
         seen.add(c)
         out.append(c)
+    return out
+
+
+def clean_strings(values):
+    """Clean and deduplicate display strings while preserving their order."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    out = []
+    seen = set()
+    for value in values or []:
+        cleaned = clean_text(value)
+        if cleaned is None or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
     return out
 
 
@@ -263,8 +280,8 @@ def normalize_record(payload):
         raise MalformedPayload("missing/invalid single-character 'character'")
 
     senses = clean_meanings(payload.get("meanings"))
-    on = [r for r in (payload.get("onReadings") or []) if isinstance(r, str) and r.strip()]
-    kun = [r for r in (payload.get("kunReadings") or []) if isinstance(r, str) and r.strip()]
+    on = clean_strings(payload.get("onReadings"))
+    kun = clean_strings(payload.get("kunReadings"))
 
     rank = payload.get("frequencyRank")
     rank = rank if isinstance(rank, int) and rank > 0 else None
@@ -380,8 +397,8 @@ def kanjidic2_record(character, fields):
     fabricated for these characters.
     """
     senses = clean_meanings(fields.get("meanings"))
-    on = [r for r in (fields.get("on") or []) if isinstance(r, str) and r.strip()]
-    kun = [r for r in (fields.get("kun") or []) if isinstance(r, str) and r.strip()]
+    on = clean_strings(fields.get("on"))
+    kun = clean_strings(fields.get("kun"))
     return {
         "character": character,
         "keyword": senses[0] if senses else None,
@@ -533,8 +550,8 @@ def build_donut_node(record):
     """Build an accessible reading-distribution donut structured-content node.
 
     The donut ring is a CSS conic-gradient (deterministic, no per-entry asset)
-    with a hole punched by a centred disc; it carries an aria-label so it is
-    described to assistive tech. A visible text legend lists every segment with
+    with a hole punched by a centred disc. A visible semantic list and container
+    title describe it to assistive tech. The legend lists every segment with
     its label, count, and truthful percentage so NOTHING depends on colour, SVG,
     or CSS alone. Returns None when the entry has no example words.
     """
@@ -550,10 +567,9 @@ def build_donut_node(record):
     # Donut ring: a coloured conic-gradient disc with a centred hole. The
     # conic-gradient BACKGROUND is data-driven (per entry) so it must be inline;
     # all sizing/shape lives in the bundled styles.css keyed on data-sc-bee-role.
-    # Marked aria-hidden because the legend below carries the same info as text.
     ring = {
         "tag": "div",
-        "data": {"beeRole": "donut-ring", "ariaHidden": "true"},
+        "data": {"beeRole": "donut-ring"},
         "style": {"background": _conic_gradient(segments)},
         "content": {
             "tag": "div",
@@ -567,7 +583,7 @@ def build_donut_node(record):
     for s in segments:
         swatch = {
             "tag": "span",
-            "data": {"beeRole": "donut-swatch", "ariaHidden": "true"},
+            "data": {"beeRole": "donut-swatch"},
             # colour is data-driven; the glyph keeps the swatch visible with no CSS
             "style": {"background": s["color"], "color": s["color"]},
             "content": "\u25a0",  # filled square, visible even without CSS colour
@@ -589,7 +605,7 @@ def build_donut_node(record):
         "lang": "en",
         "title": aria,
         "content": [
-            {"tag": "div", "data": {"beeRole": "donut-graphic", "ariaLabel": aria},
+            {"tag": "div", "data": {"beeRole": "donut-graphic"},
              "content": [ring]},
             legend,
         ],
@@ -1258,16 +1274,34 @@ def build_manifest(revision, content_hash, date, source_counts,
     }
 
 
-def content_hash(banks, assets=None):
-    """SHA-256 over the normalized bank content + bundled assets.
+def content_hash(banks, assets=None, source_counts=None,
+                 enrichment_counts=None, sitemap_size=0):
+    """SHA-256 over all revision-independent package content.
 
-    Revision-independent (excludes the revision string and build time) but
-    covers KanjiVG-derived assets so a change in stroke/phonetic enrichment
-    yields a new hash and therefore a new published revision.
+    The revision and generated manifest fields are excluded, but banks, assets,
+    updater metadata, styles, and bundled licence notices are covered. Any
+    user-visible package change therefore requires a fresh release revision.
     """
-    material = {name: banks[name] for _, name in BANK_FILES}
+    material = {
+        "banks": {name: banks[name] for _, name in BANK_FILES},
+        "package": {
+            "index": build_index(""),
+            "manifest": build_manifest(
+                revision="",
+                content_hash="",
+                date="",
+                source_counts=source_counts or {},
+                enrichment_counts=enrichment_counts or {},
+                sitemap_size=sitemap_size,
+                code_revision="",
+            ),
+            "styles.css": STYLES_CSS,
+            "LICENSE-data.txt": LICENSE_DATA_TEXT,
+            "LICENSE-kanjivg.txt": LICENSE_KANJIVG_TEXT if assets else None,
+        },
+    }
     if assets:
-        material["_assets"] = {k: assets[k] for k in sorted(assets)}
+        material["assets"] = {k: assets[k] for k in sorted(assets)}
     payload = dump_json(material)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1629,10 +1663,18 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         payload = payloads.get(char)
         if payload is None:
             continue
+        if not isinstance(payload, dict) or payload.get("character") != char:
+            actual = payload.get("character") if isinstance(payload, dict) else None
+            raise MalformedPayload(f"requested {char} but received payload for {actual!r}")
         try:
-            records.append(normalize_record(payload))
+            record = normalize_record(payload)
         except MalformedPayload:
             continue  # skip characters whose payload cannot be trusted
+        if record["frequency_rank"] is not None and record["frequency_rank"] <= 1000:
+            example_count = sum(len(group["words"]) for group in record["examples"])
+            if not record["keyword"] or not (record["on"] or record["kun"]) or example_count < 1:
+                raise MalformedPayload(f"Top-1000 quality floor failed for {char}")
+        records.append(record)
 
     jiten_count = len(records)
     if kanjidic2_cache_dir:
@@ -1649,13 +1691,25 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         enrichment = assemble_enrichment(svgs, ranks)
 
     banks = build_banks(records, aliases or {}, enrichment=enrichment)
-    chash = content_hash(banks, enrichment.get("assets"))
+    source_counts = {"jiten": jiten_count, "kanjidic2": kanjidic2_count}
+    enrichment_counts = {
+        "strokes": len(enrichment["strokes"]),
+        "families": len(enrichment["families"]),
+        "assets": len(enrichment["assets"]),
+    }
+    chash = content_hash(
+        banks,
+        enrichment.get("assets"),
+        source_counts=source_counts,
+        enrichment_counts=enrichment_counts,
+        sitemap_size=len(characters),
+    )
     return {
         "records": records,
         "banks": banks,
         "enrichment": enrichment,
         "content_hash": chash,
-        "source_counts": {"jiten": jiten_count, "kanjidic2": kanjidic2_count},
+        "source_counts": source_counts,
         "zip_bytes": build_zip(banks, date_to_revision(date), enrichment.get("assets")),
     }
 
