@@ -466,6 +466,238 @@ def build_donut_node(record):
     }
 
 
+# --- KanjiVG-sourced phonetic families ---------------------------------------
+
+# KanjiVG records phonetic components via the kvg:phon attribute. We only ever
+# surface a phonetic relationship that KanjiVG itself marks -- never inferred.
+_KVG_PHON = re.compile(r'kvg:element="([^"]+)"[^>]*kvg:phon="([^"]+)"')
+_KVG_PHON_ALT = re.compile(r'kvg:phon="([^"]+)"[^>]*kvg:element="([^"]+)"')
+
+PHONETIC_SOURCE = "KanjiVG"
+
+
+def extract_phonetic_component(svg_text, character):
+    """Return the phonetic component KanjiVG marks for a character, else None.
+
+    Reads only the kvg:phon marker attached to the top-level element group.
+    Never infers a component; a self-referential marker (phon == character) is
+    not a family relationship and returns None.
+    """
+    if not isinstance(svg_text, str) or not isinstance(character, str):
+        return None
+    for m in _KVG_PHON.finditer(svg_text):
+        element, phon = m.group(1), m.group(2)
+        if element == character:
+            return phon if phon and phon != character else None
+    for m in _KVG_PHON_ALT.finditer(svg_text):
+        phon, element = m.group(1), m.group(2)
+        if element == character:
+            return phon if phon and phon != character else None
+    return None
+
+
+def build_phonetic_families(phon_map, ranks):
+    """Group characters that share a phonetic component into ordered families.
+
+    phon_map: {character: phonetic_component} sourced from KanjiVG kvg:phon.
+    ranks:    {character: frequency_rank} used to order members usefully.
+
+    Members are ordered by frequency rank ascending (most common first), then
+    by stable Unicode codepoint for characters without a rank. Singleton
+    components (only one member) are dropped -- a family needs >= 2 members.
+    Returns {component: {"component", "members", "source"}}, deterministic.
+    """
+    grouped = {}
+    for char, comp in (phon_map or {}).items():
+        if not comp or comp == char:
+            continue
+        grouped.setdefault(comp, set()).add(char)
+
+    families = {}
+    for comp in sorted(grouped, key=lambda c: [ord(x) for x in c]):
+        members = grouped[comp]
+        if len(members) < 2:
+            continue
+
+        def sort_key(ch):
+            r = ranks.get(ch)
+            # ranked chars first (by rank), unranked after (by codepoint)
+            return (0, r, ord(ch)) if isinstance(r, int) else (1, 0, ord(ch))
+
+        ordered = sorted(members, key=sort_key)
+        families[comp] = {
+            "component": comp,
+            "members": ordered,
+            "source": PHONETIC_SOURCE,
+        }
+    return families
+
+
+def build_phonetic_family_node(character, family):
+    """Build a structured-content node for a character's phonetic family.
+
+    Names the shared phonetic component, lists the sibling members (excluding
+    the character itself), and records a compact source attribution. Returns
+    None when the character has no recorded family.
+    """
+    if not family:
+        return None
+    siblings = [m for m in family["members"] if m != character]
+    if not siblings:
+        return None
+    comp = family["component"]
+    body = [
+        {"tag": "span", "data": {"beeRole": "phon-label"},
+         "content": f"Phonetic \u97f3 {comp}: "},
+        {"tag": "span", "data": {"beeRole": "phon-members"},
+         "content": "\u3001".join(siblings)},
+        {"tag": "span", "data": {"beeRole": "phon-source"},
+         "title": f"Source: {family['source']} (kvg:phon)",
+         "content": f" \u2014 {family['source']}"},
+    ]
+    return {
+        "tag": "div",
+        "data": {"beeRole": "phonetic-family"},
+        "content": body,
+    }
+
+
+# --- KanjiVG stroke / component enrichment -----------------------------------
+
+_SVG_NS = "http://www.w3.org/2000/svg"
+_KVG_ELEMENT = re.compile(r'kvg:element="([^"]+)"')
+_KVG_PATH = re.compile(r'<path\b[^>]*\bd="([^"]+)"[^>]*>')
+
+
+def kanjivg_asset_name(character):
+    """Deterministic bundled-asset path for a character's KanjiVG SVG."""
+    return f"kanjivg/{ord(character):05x}.svg"
+
+
+def parse_kanjivg(svg_text, character):
+    """Extract deterministic stroke count + component list from a KanjiVG SVG.
+
+    stroke_count = number of <path> stroke elements. components = the ordered,
+    de-duplicated list of kvg:element values (the character and its parts).
+    Returns None when the text has no stroke paths.
+    """
+    if not isinstance(svg_text, str):
+        return None
+    paths = _KVG_PATH.findall(svg_text)
+    if not paths:
+        return None
+    seen = set()
+    components = []
+    for el in _KVG_ELEMENT.findall(svg_text):
+        if el and el not in seen:
+            seen.add(el)
+            components.append(el)
+    if character not in components:
+        components.insert(0, character)
+    return {
+        "stroke_count": len(paths),
+        "components": components,
+        "asset": kanjivg_asset_name(character),
+    }
+
+
+# Deterministic, dependency-free stroke-order animation. Each stroke is drawn in
+# sequence via stroke-dashoffset; the final frame leaves every stroke fully
+# drawn so a browser that ignores SVG animation still shows the complete glyph.
+# prefers-reduced-motion shows the finished glyph immediately (no motion).
+_STROKE_STYLE_TEMPLATE = (
+    "<style>"
+    "@keyframes beeDraw{{to{{stroke-dashoffset:0;}}}}"
+    ".bee-stroke{{fill:none;stroke:currentColor;stroke-width:3;"
+    "stroke-linecap:round;stroke-linejoin:round;"
+    "stroke-dasharray:1000;stroke-dashoffset:1000;"
+    "animation:beeDraw 0.8s linear forwards;}}"
+    "{rules}"
+    "@media (prefers-reduced-motion:reduce){{"
+    ".bee-stroke{{animation:none;stroke-dashoffset:0;}}}}"
+    "</style>"
+)
+
+
+def sanitize_kanjivg_svg(svg_text, character):
+    """Rebuild a minimal, safe, animated SVG from a KanjiVG source string.
+
+    Strips the XML declaration, DOCTYPE, comments, kvg namespaced attributes,
+    stroke-number labels, and anything script/external (scripts, event
+    handlers, xlink, <image>). Rebuilds a clean <svg> containing only the stroke
+    <path> geometry plus an internal <style> block driving a deterministic,
+    reduced-motion-guarded stroke-order animation. Output is deterministic.
+    """
+    paths = _KVG_PATH.findall(svg_text)
+    # Per-stroke staggered start so strokes animate in order; delays are fixed.
+    rules = []
+    for i in range(len(paths)):
+        delay = round(i * 0.6, 2)
+        rules.append(
+            f".bee-stroke:nth-of-type({i + 1}){{animation-delay:{delay}s;}}"
+        )
+    style = _STROKE_STYLE_TEMPLATE.format(rules="".join(rules))
+
+    path_els = "".join(
+        f'<path class="bee-stroke" d="{d}"/>' for d in paths
+    )
+    title = f"Stroke order for {character}"
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109" '
+        'width="109" height="109" role="img" '
+        f'aria-label="{title}"><title>{title}</title>'
+        f"{style}{path_els}</svg>"
+    )
+
+
+def build_stroke_node(character, info):
+    """Build a structured-content node for stroke order + components.
+
+    When a bundled SVG asset is available, references it via an img node (which
+    carries alt text) and follows it with a text line naming the stroke count
+    and components -- so the information survives even if the media, SVG, or
+    character asset is unavailable. Returns None when no info is present.
+    """
+    if not info:
+        return None
+    strokes = info.get("stroke_count")
+    components = [c for c in (info.get("components") or []) if c != character]
+    asset = info.get("asset")
+
+    text_bits = []
+    if isinstance(strokes, int):
+        text_bits.append(f"{strokes} strokes")
+    if components:
+        text_bits.append("components " + "\u3001".join(components))
+    text_line = {
+        "tag": "div",
+        "data": {"beeRole": "stroke-text"},
+        "content": " \u00b7 ".join(text_bits) if text_bits else "stroke data",
+    }
+
+    content = []
+    if asset:
+        alt = f"{character} stroke order diagram"
+        if isinstance(strokes, int):
+            alt += f" ({strokes} strokes)"
+        content.append({
+            "tag": "img",
+            "path": asset,
+            "alt": alt,
+            "title": alt,
+            "collapsible": True,
+            "collapsed": False,
+            "background": False,
+            "data": {"beeRole": "stroke-image"},
+        })
+    content.append(text_line)
+    return {
+        "tag": "div",
+        "data": {"beeRole": "stroke-order"},
+        "content": content,
+    }
+
+
 # --- Yomitan bank builders ---------------------------------------------------
 
 def _jlpt_label(level):
