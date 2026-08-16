@@ -1,0 +1,10 @@
+<!-- Lapis-compatible back template. Reuses the structured Yomitan glossary so
+     the stroke diagram, reading donut, and phonetic family render exactly as in
+     the popup. No scripts, no framework; empty fields degrade gracefully. -->
+{{FrontSide}}
+<hr id="answer">
+<div class="bee-card bee-back" lang="ja">
+  {{#MainDefinition}}<div class="bee-keyword">{{MainDefinition}}</div>{{/MainDefinition}}
+  <div class="bee-glossary">{{Meaning}}</div>
+  {{#Frequency}}<div class="bee-freq">Frequency: {{Frequency}}</div>{{/Frequency}}
+</div>
