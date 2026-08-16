@@ -9,8 +9,12 @@ SHA256SUMS
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
 .pytest_cache/
+
+# Render-preview asset copies (regenerable duplicates of bundled KanjiVG SVGs)
+/artifacts/kanjivg/
 
 # Node
 node_modules/
