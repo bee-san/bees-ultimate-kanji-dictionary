@@ -417,3 +417,42 @@ def build_alias_term_entry(alias, canonical):
         ord(alias),
         "",
     ]
+
+
+def build_banks(records, aliases=None):
+    """Assemble the four Yomitan banks from normalized records + term aliases.
+
+    Records are sorted deterministically by Unicode code point. Aliases (old
+    form -> canonical form) contribute only term-bank entries. Returns a dict
+    with term_bank, term_meta_bank, kanji_bank, kanji_meta_bank.
+    """
+    aliases = aliases or {}
+    ordered = sorted(records, key=lambda r: ord(r["character"]))
+
+    term_bank = []
+    term_meta_bank = []
+    kanji_bank = []
+    kanji_meta_bank = []
+
+    for r in ordered:
+        term_bank.append(build_term_entry(r))
+        tm = build_term_meta(r)
+        if tm is not None:
+            term_meta_bank.append(tm)
+        kanji_bank.append(build_kanji_entry(r))
+        km = build_kanji_meta(r)
+        if km is not None:
+            kanji_meta_bank.append(km)
+
+    for alias in sorted(aliases, key=ord):
+        term_bank.append(build_alias_term_entry(alias, aliases[alias]))
+
+    # Keep term bank ordered by code point including aliases.
+    term_bank.sort(key=lambda e: ord(e[0]))
+
+    return {
+        "term_bank": term_bank,
+        "term_meta_bank": term_meta_bank,
+        "kanji_bank": kanji_bank,
+        "kanji_meta_bank": kanji_meta_bank,
+    }
