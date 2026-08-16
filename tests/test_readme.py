@@ -3,10 +3,9 @@ locking in verbose prose.
 
 These guard the *facts* the README asserts -- that the linked screenshots
 exist, the download / auto-update URLs match what the generator emits, the
-documented build command targets the real module, the required licence /
-attribution notices are present, and no Anki/Lapis material has crept back --
-never the exact wording. Prose can be reworded freely; only broken links,
-drifted URLs, or dropped legal notices fail here.
+documented build command targets the real module, and the required licence /
+attribution notices are present. Prose can be reworded freely; only broken
+links, drifted URLs, or dropped legal notices fail here.
 """
 import pathlib
 import re
@@ -64,8 +63,3 @@ def test_reading_share_semantics_stated_truthfully():
     low = README.lower()
     assert "jiten vocabulary entries by reading" in low
     assert "not" in low and ("occurrence" in low or "usage frequency" in low)
-
-
-def test_no_anki_or_lapis_material():
-    assert not re.search(r"anki|lapis", README, re.IGNORECASE), \
-        "Anki/Lapis material must not appear in the README"

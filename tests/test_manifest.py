@@ -9,6 +9,7 @@ attribution. It is bundled inside the ZIP (so an importer can inspect
 provenance offline) and emitted alongside the ZIP as a release asset. Bundling
 it must NOT break deterministic rebuilds from identical inputs.
 """
+import hashlib
 import io
 import json
 import pathlib
@@ -62,6 +63,11 @@ def test_manifest_carries_source_and_revision_provenance():
     assert any("KanjiVG" in lic for lic in m["licences"])
 
 
+def test_detected_code_revision_is_an_unambiguous_full_object_id():
+    revision = bk._code_revision()
+    assert revision == "unknown" or len(revision) == 40
+
+
 def test_manifest_is_bundled_in_the_zip():
     banks = bk.build_banks(_records())
     manifest = _sample_manifest()
@@ -93,8 +99,6 @@ def test_manifest_bundled_does_not_enter_content_hash():
 def _emit_release(out_dir, revision, banks, manifest):
     """Mirror main()'s artifact emission: bundle the manifest in the ZIP, write
     the standalone MANIFEST.json, and a SHA256SUMS covering both files."""
-    import hashlib
-
     zip_bytes = bk.build_zip(banks, revision, manifest=manifest)
     (out_dir / bk.ZIP_NAME).write_bytes(zip_bytes)
     manifest_text = bk.dump_json(manifest)
@@ -128,6 +132,39 @@ def test_release_artifacts_verify_against_sha256sums(tmp_path):
     with zipfile.ZipFile(tmp_path / bk.ZIP_NAME) as zf:
         bundled = zf.read("MANIFEST.json")
     assert bundled == (tmp_path / "MANIFEST.json").read_bytes()
+
+
+def test_release_artifacts_can_be_bound_to_the_final_tag_commit(tmp_path):
+    banks = bk.build_banks(_records())
+    manifest = _sample_manifest()
+    first = _emit_release(tmp_path, "2026.08.16.2", banks, manifest)
+
+    final_commit = "0123456789abcdef0123456789abcdef01234567"
+    bk.bind_release_artifacts_to_code_revision(
+        tmp_path, final_commit, revision="2026.08.16.3"
+    )
+
+    with zipfile.ZipFile(tmp_path / bk.ZIP_NAME) as zf:
+        bundled = json.loads(zf.read("MANIFEST.json"))
+        bundled_index = json.loads(zf.read("index.json"))
+    standalone = json.loads((tmp_path / "MANIFEST.json").read_text(encoding="utf-8"))
+    assert bundled["codeRevision"] == final_commit
+    assert bundled["revision"] == "2026.08.16.3"
+    assert bundled_index["revision"] == "2026.08.16.3"
+    assert standalone == bundled
+    assert (tmp_path / bk.ZIP_NAME).read_bytes() != first
+
+    lines = (tmp_path / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    for line in lines:
+        digest, name = line.split("  ", 1)
+        actual = hashlib.sha256((tmp_path / name).read_bytes()).hexdigest()
+        assert actual == digest, name
+
+    first_bound = (tmp_path / bk.ZIP_NAME).read_bytes()
+    bk.bind_release_artifacts_to_code_revision(
+        tmp_path, final_commit, revision="2026.08.16.3"
+    )
+    assert (tmp_path / bk.ZIP_NAME).read_bytes() == first_bound
 
 
 def test_changed_content_publishes_unchanged_content_does_not():

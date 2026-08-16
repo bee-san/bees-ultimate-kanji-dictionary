@@ -78,6 +78,13 @@ def test_sanitized_strokes_are_visible_without_animation_or_css():
     assert "stroke-dashoffset:1000" not in default_rule
 
 
+def test_sanitized_strokes_remain_legible_in_dark_embedded_images():
+    out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
+    assert ":root{color:#1f1f1f;}" in out
+    assert "@media (prefers-color-scheme:dark)" in out
+    assert ":root{color:#e8e8e8;}" in out
+
+
 def test_sanitize_deterministic_bytes():
     assert bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f") == bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
 

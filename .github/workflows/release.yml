@@ -55,28 +55,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          draft_tag="$(gh release list --limit 100 --json tagName,isDraft,createdAt \
-            --jq 'map(select(.isDraft and (.tagName | test("^v[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}(\\.[0-9]+)?$")))) | sort_by(.createdAt) | reverse | .[0].tagName // ""')"
-          if [ -n "$draft_tag" ]; then
-            mkdir -p build
-            if gh release download "$draft_tag" --dir build && \
-               test -f build/bees-ultimate-kanji-dictionary.zip && \
-               test -f build/MANIFEST.json && test -f build/SHA256SUMS && \
-               (cd build && sha256sum -c SHA256SUMS) && \
-               node scripts/validate_yomitan.mjs build/bees-ultimate-kanji-dictionary.zip && \
-               python -c "import zipfile,sys; z=zipfile.ZipFile('build/bees-ultimate-kanji-dictionary.zip'); sys.exit(0 if z.read('MANIFEST.json') == open('build/MANIFEST.json','rb').read() else 1)"; then
-              python -c "import json,zipfile; z=zipfile.ZipFile('build/bees-ultimate-kanji-dictionary.zip'); open('dist/index.json','wb').write(z.read('index.json')+b'\n'); m=json.loads(z.read('MANIFEST.json')); open('dist/content.sha256','w').write(m['contentHash']+'\n')"
-              echo "recovery=true" >> "$GITHUB_OUTPUT"
-            else
-              gh release delete "$draft_tag" --yes --cleanup-tag
-              rm -rf build
-              python -m bees_kanji --cache cache --out build --dist dist
-              echo "recovery=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            python -m bees_kanji --cache cache --out build --dist dist
-            echo "recovery=false" >> "$GITHUB_OUTPUT"
+          revision="$(python -c 'import json;print(json.load(open("dist/index.json"))["revision"])')"
+          release_tag="v$revision"
+          release_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag" 2>/dev/null || true)"
+          latest_tag="$(gh api --jq .tag_name "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
+          asset_names="$(gh release view "$release_tag" --json assets --jq '[.assets[].name] | sort | join(" ")' 2>/dev/null || true)"
+          force_fresh=false
+          if [ -z "$release_draft" ]; then
+            force_fresh=true
+          elif [ "$release_draft" = "true" ]; then
+            gh release delete "$release_tag" --yes --cleanup-tag
+            force_fresh=true
+          elif [ "$release_draft" = "false" ] && { [ "$release_immutable" != "true" ] || [ "$latest_tag" != "$release_tag" ] || [ "$asset_names" != "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip" ]; }; then
+            force_fresh=true
           fi
+          if [ "$force_fresh" = "true" ]; then
+            # Never trust bytes or checksums from a mutable/draft release. Removing
+            # only the comparison hash forces a fresh revision from cached sources.
+            rm -f dist/content.sha256
+          fi
+          python -m bees_kanji --cache cache --out build --dist dist
+          echo "recovery=false" >> "$GITHUB_OUTPUT"
 
       - name: Save resumable acquisition cache
         if: always()
@@ -105,23 +105,19 @@ jobs:
             release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag" 2>/dev/null || true)"
             latest_tag="$(gh api --jq .tag_name "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
             asset_names="$(gh release view "$release_tag" --json assets --jq '[.assets[].name] | sort | join(" ")' 2>/dev/null || true)"
-            release_incomplete=false
-            if [ "$release_draft" = "false" ] && [ "$remote_tag_commit" = "$(git rev-parse HEAD)" ]; then
-              if [ "$release_immutable" != "true" ] || [ "$latest_tag" != "$release_tag" ] || [ "$asset_names" != "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip" ]; then
-                release_incomplete=true
-              fi
-            fi
-            if [ "$release_draft" = "true" ] || [ "$release_incomplete" = "true" ]; then
-              mkdir -p build
-              gh release download "$release_tag" --dir build
-              echo "publish=true" >> "$GITHUB_OUTPUT"
-              echo "recovery=true" >> "$GITHUB_OUTPUT"
-              echo "revision=$revision" >> "$GITHUB_OUTPUT"
-            else
-              echo "publish=false" >> "$GITHUB_OUTPUT"
-              echo "recovery=false" >> "$GITHUB_OUTPUT"
-              echo "No content change; nothing to publish."
-            fi
+            test "$release_draft" = "false"
+            test "$release_immutable" = "true"
+            test "$latest_tag" = "$release_tag"
+            test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"
+            mkdir -p verify-existing
+            gh release download "$release_tag" --pattern MANIFEST.json --dir verify-existing
+            manifest_code_revision="$(python -c 'import json;print(json.load(open("verify-existing/MANIFEST.json"))["codeRevision"])')"
+            manifest_revision="$(python -c 'import json;print(json.load(open("verify-existing/MANIFEST.json"))["revision"])')"
+            test "$remote_tag_commit" = "$manifest_code_revision"
+            test "$manifest_revision" = "$revision"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "recovery=false" >> "$GITHUB_OUTPUT"
+            echo "No content change; nothing to publish."
           fi
 
       - name: Prepare updater commit
@@ -135,6 +131,12 @@ jobs:
             export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
             git commit -m "chore: publish revision ${{ steps.check.outputs.revision }}"
           fi
+
+      - name: Bind artifacts to final commit
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          expected_commit="$(git rev-parse HEAD)"
+          python -c 'import pathlib,sys; from bees_kanji import bind_release_artifacts_to_code_revision; bind_release_artifacts_to_code_revision(pathlib.Path("build"), sys.argv[1])' "$expected_commit"
 
       - name: Publish release
         if: steps.check.outputs.publish == 'true'
@@ -166,7 +168,7 @@ jobs:
             git tag "$release_tag" "$expected_commit"
             git push origin "refs/tags/$release_tag:refs/tags/$release_tag"
           fi
-          if ! gh release view "$release_tag" >/dev/null 2>&1; then
+          create_draft_release() {
             gh release create "$release_tag" \
               build/bees-ultimate-kanji-dictionary.zip \
               build/MANIFEST.json \
@@ -175,6 +177,25 @@ jobs:
               --verify-tag \
               --title "Bee's Ultimate Kanji Dictionary ${{ steps.check.outputs.revision }}" \
               --notes "Revision ${{ steps.check.outputs.revision }}. Import the ZIP in Yomitan (self-updating). Verify with SHA256SUMS; MANIFEST.json records the source/revision provenance. Bundled licences: LICENSE-data.txt (JMdict/KANJIDIC via Jiten, CC BY-SA) and LICENSE-kanjivg.txt (KanjiVG, CC BY-SA)."
+          }
+          if ! gh release view "$release_tag" >/dev/null 2>&1; then
+            create_draft_release
+          else
+            release_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+            release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag")"
+            if [ "$release_draft" = "true" ]; then
+              gh release upload "$release_tag" \
+                build/bees-ultimate-kanji-dictionary.zip \
+                build/MANIFEST.json \
+                build/SHA256SUMS \
+                --clobber
+            elif [ "$release_immutable" != "true" ]; then
+              gh release delete "$release_tag" --yes
+              create_draft_release
+            else
+              echo "Cannot replace incomplete immutable release $release_tag; fix forward with a fresh revision." >&2
+              exit 1
+            fi
           fi
 
       - name: Verify published assets
@@ -195,6 +216,7 @@ jobs:
           node scripts/validate_yomitan.mjs verify/bees-ultimate-kanji-dictionary.zip
           # the standalone manifest asset must match the copy bundled in the ZIP
           python -c "import zipfile,sys; b=zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('MANIFEST.json'); s=open('verify/MANIFEST.json','rb').read(); sys.exit(0 if b==s else 'MANIFEST.json mismatch')"
+          python -c "import json,sys,zipfile; manifest=json.load(open('verify/MANIFEST.json')); index=json.loads(zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('index.json')); expected_commit,expected_revision=sys.argv[1:]; assert manifest['codeRevision'] == expected_commit; assert manifest['revision'] == expected_revision; assert index['revision'] == expected_revision" "$expected_commit" "${{ steps.check.outputs.revision }}"
           for asset in bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS; do
             cmp "build/$asset" "verify/$asset"
           done

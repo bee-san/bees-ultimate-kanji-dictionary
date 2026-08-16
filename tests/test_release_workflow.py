@@ -59,19 +59,47 @@ def test_verified_draft_and_updater_commit_precede_public_immutable_release():
     assert 'cmp "build/$asset" "verify/$asset"' in pre_push
 
 
-def test_release_retry_can_reuse_its_exact_tag_and_draft():
+def test_release_assets_are_rebound_and_verified_against_final_tag_commit():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    prepare = workflow.index("Prepare updater commit")
+    bind = workflow.index("Bind artifacts to final commit")
+    publish = workflow.index("Publish release")
+    assert prepare < bind < publish
+    assert "bind_release_artifacts_to_code_revision" in workflow[bind:publish]
+    assert "git rev-parse HEAD" in workflow[bind:publish]
+    assert "manifest['codeRevision'] == expected" in workflow
+
+
+def test_release_retry_rebuilds_trusted_bytes_under_a_fresh_revision():
     workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     assert 'test "$remote_tag_commit" = "$expected_commit"' in workflow
     assert 'gh release view "$release_tag"' in workflow
     assert 'gh release create "$release_tag"' in workflow
-    assert "recovery=true" in workflow
-    assert 'gh release download "$release_tag" --dir build' in workflow
-    assert "release_incomplete" in workflow
     assert "release_immutable" in workflow
-    assert "gh release list" in workflow
-    assert 'test("^v[0-9]{4}' in workflow
-    assert "(cd build && sha256sum -c SHA256SUMS)" in workflow
-    assert 'gh release delete "$draft_tag" --yes --cleanup-tag' in workflow
-    assert "steps.build.outputs.recovery" in workflow
+    assert 'rm -f dist/content.sha256' in workflow
+    assert 'gh release download "$release_tag" --dir build' not in workflow
+    assert "Never trust bytes or checksums from a mutable/draft release" in workflow
+    assert 'gh release delete "$release_tag" --yes --cleanup-tag' in workflow
+    assert 'if [ -z "$release_draft" ]; then' in workflow
     assert 'steps.check.outputs.recovery }}" != "true"' in workflow
     assert 'gh release delete "$release_tag" --yes --cleanup-tag' in workflow
+
+
+def test_public_mutable_incomplete_release_is_recreated_as_a_draft():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'elif [ "$release_immutable" != "true" ]; then' in workflow
+    assert 'gh release delete "$release_tag" --yes' in workflow
+    assert "create_draft_release" in workflow
+    assert "Cannot replace incomplete immutable release" in workflow
+
+
+def test_no_build_requires_a_complete_release_bound_to_its_tag():
+    workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    assert 'test "$release_draft" = "false"' in workflow
+    assert 'test "$release_immutable" = "true"' in workflow
+    assert 'test "$latest_tag" = "$release_tag"' in workflow
+    assert 'gh release download "$release_tag" --pattern MANIFEST.json' in workflow
+    assert 'test "$remote_tag_commit" = "$manifest_code_revision"' in workflow
+    assert 'test "$manifest_revision" = "$revision"' in workflow
+    assert "manifest['revision'] == expected_revision" in workflow
+    assert "index['revision'] == expected_revision" in workflow

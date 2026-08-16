@@ -7,6 +7,7 @@ Kept small and understandable on purpose. No service layers, no plugins.
 import hashlib
 import io
 import json
+import pathlib
 import re
 import time
 import urllib.error
@@ -832,6 +833,8 @@ def parse_kanjivg(svg_text, character):
 # prefers-reduced-motion shows the finished glyph immediately (no motion).
 _STROKE_STYLE_TEMPLATE = (
     "<style>"
+    ":root{{color:#1f1f1f;}}"
+    "@media (prefers-color-scheme:dark){{:root{{color:#e8e8e8;}}}}"
     "@keyframes beeDraw{{to{{stroke-dashoffset:0;}}}}"
     "@media (prefers-reduced-motion:no-preference){{"
     ".bee-stroke{{stroke-dasharray:1000;stroke-dashoffset:1000;"
@@ -1653,6 +1656,65 @@ def build_zip(banks, revision, assets=None, manifest=None):
     return buf.getvalue()
 
 
+def bind_release_artifacts_to_code_revision(out_dir, code_revision, revision=None):
+    """Rebind built release artifacts to the commit that will own their tag.
+
+    The updater files are committed after the initial content build, so the
+    final release commit does not exist when that build starts. Rewriting only
+    the revision-independent provenance field after the updater commit avoids
+    publishing a manifest that points at its parent. ZIP metadata and member
+    order stay deterministic, the standalone manifest stays byte-identical to
+    the bundled copy, and SHA256SUMS is regenerated for the changed bytes.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", code_revision):
+        raise ValueError("code_revision must be a full 40-character git object ID")
+
+    out_dir = pathlib.Path(out_dir)
+    zip_path = out_dir / ZIP_NAME
+    manifest_path = out_dir / "MANIFEST.json"
+    checksum_path = out_dir / "SHA256SUMS"
+
+    with zipfile.ZipFile(zip_path) as source:
+        infos = source.infolist()
+        names = [info.filename for info in infos]
+        if names.count("MANIFEST.json") != 1 or names.count("index.json") != 1:
+            raise ValueError("release ZIP must contain exactly one manifest and index")
+        members = [(info.filename, source.read(info)) for info in infos]
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["codeRevision"] = code_revision
+    if revision is not None:
+        if not re.fullmatch(r"[0-9]{4}\.[0-9]{2}\.[0-9]{2}(?:\.[0-9]+)?", revision):
+            raise ValueError("revision must be a versioned YYYY.MM.DD release revision")
+        manifest["revision"] = revision
+    manifest_bytes = dump_json(manifest).encode("utf-8")
+    replaced = False
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as target:
+        for name, data in members:
+            if name == "MANIFEST.json":
+                data = manifest_bytes
+                replaced = True
+            elif name == "index.json" and revision is not None:
+                index = json.loads(data)
+                index["revision"] = revision
+                data = dump_json(index).encode("utf-8")
+            info, data = _zip_member(name, data)
+            target.writestr(info, data)
+    if not replaced:
+        raise ValueError("release ZIP does not contain MANIFEST.json")
+
+    zip_bytes = buf.getvalue()
+    zip_path.write_bytes(zip_bytes)
+    manifest_path.write_bytes(manifest_bytes)
+    checksum_path.write_text(
+        f"{hashlib.sha256(zip_bytes).hexdigest()}  {ZIP_NAME}\n"
+        f"{hashlib.sha256(manifest_bytes).hexdigest()}  MANIFEST.json\n",
+        encoding="utf-8",
+    )
+
+
 # --- Daily acquisition with a resumable per-character cache ------------------
 
 API_BASE = "https://api.jiten.moe/api/kanji"
@@ -2068,7 +2130,7 @@ def _load_previous(dist_index_path):
 
 
 def _code_revision():
-    """Return the short git revision of the generator, or 'unknown'.
+    """Return the full git revision of the generator, or 'unknown'.
 
     Deterministic within a single checkout; recorded in the manifest so a
     published release is traceable back to the exact code that produced it.
@@ -2079,7 +2141,7 @@ def _code_revision():
     root = _pl.Path(__file__).resolve().parent.parent
     try:
         out = _sp.check_output(
-            ["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
             stderr=_sp.DEVNULL,
         )
         return out.decode("utf-8").strip() or "unknown"
