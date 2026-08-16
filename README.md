@@ -49,7 +49,7 @@ and bundled stroke/phonetic aids in a single canonical ZIP. Compared to the
 older compact helper, entries are richer and self-updating, with no editions to
 choose between. Where Jiten serves a character its enriched entry is
 authoritative; every remaining character KANJIDIC2 covers is added as an honest
-fallback (English meanings, on/kun/nanori readings, stroke count, grade/JLPT
+fallback (English meanings, on/kun readings, stroke count, grade/JLPT
 when present) with no invented examples, ranks, or percentages. Everything is
 derived from Jiten, KANJIDIC2/KANJIDIC, and KanjiVG and attributed below — no
 new claims are invented.
@@ -114,7 +114,7 @@ misleading `totalWords`-derived percentages) is removed. There is exactly **one
 canonical ZIP** — no Core/Standard/Extended editions.
 
 **KANJIDIC2 fallback entries** (characters Jiten does not serve) carry only the
-fields KANJIDIC2 actually provides — English meanings, on/kun/nanori readings,
+fields this dictionary surfaces from KANJIDIC2 — English meanings, on/kun readings,
 stroke count, and grade/JLPT when present — and honestly omit everything Jiten
 would have supplied: no example vocabulary, no frequency rank or frequency-bank
 entry, no reading-distribution donut, and no phonetic family or Jiten
@@ -163,7 +163,7 @@ Each `latest` release exposes exactly three files, and nothing else:
 - **English only.** Glosses and meanings are English; there is no other target
   language.
 - **KANJIDIC2 fallback entries are plain.** Characters Jiten does not serve
-  carry only what KANJIDIC2 supplies (meanings, on/kun/nanori, stroke count,
+  carry only what this dictionary surfaces from KANJIDIC2 (meanings, on/kun, stroke count,
   grade/JLPT) — no example vocabulary, no frequency rank or frequency-bank
   entry, no reading-distribution donut, and no phonetic family. A KanjiVG stroke
   diagram is attached only where KanjiVG has one.
@@ -191,9 +191,11 @@ python -m bees_kanji             # writes build/ (ZIP + MANIFEST.json + SHA256SU
 ```
 
 - Uses the unauthenticated Jiten API **once per UTC day**. There is no API key.
-- Responses are cached under `cache/<UTC-date>/`, so a same-day rerun makes zero
-  requests and an interrupted run fetches only the characters it still needs.
-- KanjiVG stroke SVGs are acquired the same way — once per UTC day into
+- The sitemap, responses, and daily not-found results are cached under
+  `cache/<UTC-date>/`, so a same-day rerun makes zero Jiten requests and an
+  interrupted run fetches only the characters it still needs.
+- KanjiVG stroke SVGs are acquired from the pinned source revision recorded in
+  `MANIFEST.json`, once per UTC day into
   `kanjivg-cache/<UTC-date>/`, resumable and cache-first — then sanitized and
   bundled. No API key, no extra acquisition machinery.
 - The static [KANJIDIC2](https://www.edrdg.org/wiki/index.php/KANJIDIC_Project)
@@ -238,8 +240,9 @@ templates and styling that reuse the dictionary's own fields. See
 Generator code is MIT (see `LICENSE`). Dictionary **data** is redistributed
 under CC BY-SA 4.0:
 
-> Dictionary data derived from Jiten (https://jiten.moe), using JMdict/KANJIDIC
-> data from the Electronic Dictionary Research and Development Group (EDRDG).
+> Dictionary data derived from Jiten (https://jiten.moe) and directly from
+> KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary Research
+> and Development Group (EDRDG).
 > Data is redistributed under CC BY-SA 4.0; see
 > https://creativecommons.org/licenses/by-sa/4.0/ and
 > https://www.edrdg.org/edrdg/licence.html.
@@ -247,7 +250,8 @@ under CC BY-SA 4.0:
 **Stroke-order diagrams and phonetic families** are derived from
 [KanjiVG](https://kanjivg.tagaini.net/) (© Ulrich Apel), distributed under
 CC BY-SA 3.0. The bundled SVGs are sanitized adaptations, redistributed under
-the same share-alike licence. See `LICENSE-kanjivg.txt`.
+the same share-alike licence. The exact upstream commit is recorded in every
+`MANIFEST.json`; see `LICENSE-kanjivg.txt`.
 
 Both notices (`LICENSE-data.txt` and, when stroke assets ship, `LICENSE-kanjivg.txt`)
 are bundled inside every release ZIP alongside the data.

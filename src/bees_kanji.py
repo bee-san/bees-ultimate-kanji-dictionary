@@ -735,11 +735,11 @@ def parse_kanjivg(svg_text, character):
 _STROKE_STYLE_TEMPLATE = (
     "<style>"
     "@keyframes beeDraw{{to{{stroke-dashoffset:0;}}}}"
-    ".bee-stroke{{fill:none;stroke:currentColor;stroke-width:3;"
-    "stroke-linecap:round;stroke-linejoin:round;"
-    "stroke-dasharray:1000;stroke-dashoffset:1000;"
+    "@media (prefers-reduced-motion:no-preference){{"
+    ".bee-stroke{{stroke-dasharray:1000;stroke-dashoffset:1000;"
     "animation:beeDraw 0.8s linear forwards;}}"
     "{rules}"
+    "}}"
     "@media (prefers-reduced-motion:reduce){{"
     ".bee-stroke{{animation:none;stroke-dashoffset:0;}}}}"
     "</style>"
@@ -766,7 +766,9 @@ def sanitize_kanjivg_svg(svg_text, character):
     style = _STROKE_STYLE_TEMPLATE.format(rules="".join(rules))
 
     path_els = "".join(
-        f'<path class="bee-stroke" d="{d}"/>' for d in paths
+        f'<path class="bee-stroke" fill="none" stroke="currentColor" '
+        f'stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="{d}"/>'
+        for d in paths
     )
     title = f"Stroke order for {character}"
     return (
@@ -1052,16 +1054,17 @@ REPO = "bee-san/bees-ultimate-kanji-dictionary"
 ZIP_NAME = "bees-ultimate-kanji-dictionary.zip"
 
 ATTRIBUTION = (
-    "Dictionary data derived from Jiten (https://jiten.moe), using "
-    "JMdict/KANJIDIC data from the Electronic Dictionary Research and "
-    "Development Group (EDRDG). Data is redistributed under CC BY-SA 4.0; "
+    "Dictionary data derived from Jiten (https://jiten.moe) and directly from "
+    "KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary "
+    "Research and Development Group (EDRDG). Data is redistributed under CC BY-SA 4.0; "
     "see https://creativecommons.org/licenses/by-sa/4.0/ and "
     "https://www.edrdg.org/edrdg/licence.html."
 )
 
 LICENSE_DATA_TEXT = (
-    "Dictionary data derived from Jiten (https://jiten.moe), using JMdict/KANJIDIC\n"
-    "data from the Electronic Dictionary Research and Development Group (EDRDG).\n"
+    "Dictionary data derived from Jiten (https://jiten.moe) and directly from\n"
+    "KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary\n"
+    "Research and Development Group (EDRDG).\n"
     "Data is redistributed under CC BY-SA 4.0; see\n"
     "https://creativecommons.org/licenses/by-sa/4.0/ and\n"
     "https://www.edrdg.org/edrdg/licence.html.\n"
@@ -1231,6 +1234,7 @@ def build_manifest(revision, content_hash, date, source_counts,
             },
             "kanjivg": {
                 "url": "https://kanjivg.tagaini.net/",
+                "revision": KANJIVG_REVISION,
                 "assets": ec.get("assets", 0),
                 "role": "stroke-order diagrams + phonetic-component relationships",
             },
@@ -1371,12 +1375,37 @@ def fetch_sitemap():
     return [c for c in data if isinstance(c, str) and c]
 
 
+def fetch_sitemap_cached(cache_dir, date, fetcher=fetch_sitemap, offline=False):
+    """Return the daily sitemap, reusing an atomic dated cache on reruns."""
+    import pathlib as _pl
+
+    day_dir = _pl.Path(cache_dir) / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / "sitemap.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, list) and all(isinstance(c, str) and c for c in data):
+                return data
+        except (ValueError, OSError):
+            pass
+    if offline:
+        raise FileNotFoundError(f"Jiten sitemap cache missing: {path}")
+    data = fetcher()
+    if not isinstance(data, list) or not all(isinstance(c, str) and c for c in data):
+        raise MalformedPayload("sitemap is not a list of characters")
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return data
+
+
 def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
     """Fetch payloads for characters, using a resumable dated on-disk cache.
 
     Cache layout: cache_dir/DATE/<codepoints>.json. Files already present for
     DATE are reused (no fetcher call). Only missing characters are fetched
-    sequentially. 404s are skipped (not cached, not returned). Returns an
+    sequentially. 404s are negatively cached for that day and not returned. Returns an
     ordered dict {character: payload} for the characters that produced data.
     """
     import pathlib as _pl
@@ -1387,6 +1416,9 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
     out = {}
     for char in characters:
         path = day_dir / cache_filename(char)
+        missing = path.with_suffix(".missing")
+        if missing.exists():
+            continue
         if path.exists():
             try:
                 out[char] = json.loads(path.read_text(encoding="utf-8"))
@@ -1396,6 +1428,7 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
         try:
             payload = fetcher(char)
         except NotFound:
+            missing.touch()
             continue  # skip 404s
         # atomic-ish write: temp then replace
         tmp = path.with_suffix(".json.tmp")
@@ -1407,7 +1440,8 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
 
 # --- KanjiVG asset acquisition (same resumable dated-cache pattern) ----------
 
-KANJIVG_BASE = "https://raw.githubusercontent.com/KanjiVG/kanjivg/master/kanji"
+KANJIVG_REVISION = "61e39cfc29724132a6f8823b166296932985a0ff"
+KANJIVG_BASE = f"https://raw.githubusercontent.com/KanjiVG/kanjivg/{KANJIVG_REVISION}/kanji"
 
 
 def kanjivg_cache_filename(character):
@@ -1447,7 +1481,8 @@ def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
 
     Cache layout mirrors the Jiten fetch: cache_dir/DATE/<codepoint>.svg. Files
     present for DATE are reused (no fetcher call); only missing characters are
-    fetched sequentially; 404s are skipped. Returns {character: svg_text}. No
+    fetched sequentially; 404s are negatively cached for that day. Returns
+    {character: svg_text}. No
     new machinery -- the same once-per-day, resumable, cache-first flow.
     """
     import pathlib as _pl
@@ -1458,6 +1493,9 @@ def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
     out = {}
     for char in characters:
         path = day_dir / kanjivg_cache_filename(char)
+        missing = path.with_suffix(".missing")
+        if missing.exists():
+            continue
         if path.exists():
             try:
                 out[char] = path.read_text(encoding="utf-8")
@@ -1467,6 +1505,7 @@ def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
         try:
             svg = fetcher(char)
         except NotFound:
+            missing.touch()
             continue
         tmp = path.with_suffix(".svg.tmp")
         tmp.write_text(svg, encoding="utf-8")
@@ -1516,7 +1555,7 @@ def assemble_enrichment(svgs, ranks):
 
 # --- KANJIDIC2 static-source acquisition (once-per-day, resumable cache) ------
 
-KANJIDIC2_URL = "http://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
+KANJIDIC2_URL = "https://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
 
 
 def fetch_kanjidic2():
@@ -1728,7 +1767,7 @@ def main(argv=None):
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[build] date={date}")
-    characters = fetch_sitemap()
+    characters = fetch_sitemap_cached(args.cache, date, offline=args.offline)
     if args.limit:
         characters = characters[: args.limit]
     print(f"[build] {len(characters)} characters from sitemap")

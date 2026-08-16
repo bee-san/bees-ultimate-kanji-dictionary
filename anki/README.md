@@ -13,7 +13,9 @@ There is no audio and no pitch accent (out of scope for this dictionary).
 1. Install the [Lapis](https://github.com/donkuri/lapis) note type in Anki
    (import its `.apkg`, or create a note type with the fields listed below).
 2. In Yomitan → Settings → **Anki**, enable Anki integration and pick the Lapis
-   note type for the *Kanji* card type.
+   note type for the *Term* card type. This dictionary intentionally includes
+   single-character term entries so Yomitan can create the note through Lapis's
+   standard term-card path.
 3. Map each Lapis field to the Yomitan marker in the table in §2.
 4. Paste the templates in §3 into the Lapis card's Front/Back/Styling if you
    want the compact, accessible layout tuned for this dictionary. (Optional —
@@ -25,16 +27,16 @@ There is no audio and no pitch accent (out of scope for this dictionary).
 Set these in Yomitan's Anki field-mapping UI. Left = Lapis field name, right =
 the exact Yomitan marker to enter for it.
 
-| Lapis field        | Yomitan marker        | Notes                                    |
-| ------------------ | --------------------- | ---------------------------------------- |
-| `Word`             | `{expression}`        | the kanji character                      |
-| `WordReading`      | `{reading}`           | empty for multi-reading kanji (expected) |
-| `Meaning`          | `{glossary}`          | our structured-content detail + keyword  |
-| `MainDefinition`   | `{glossary-first}`    | the recall keyword (first glossary item) |
-| `Frequency`        | `{frequency-harmonic-rank}` | rank-based frequency from the meta bank |
-| `FreqSort`         | `{frequency-harmonic-rank}` | numeric sort key                     |
-| `Sentence`         | `{cloze-body}`        | optional; only when mined from a sentence |
-| `Key`              | `{expression}`        | dedupe key (kanji is unique per note)    |
+| Lapis field           | Yomitan marker                                      | Notes                                    |
+| --------------------- | --------------------------------------------------- | ---------------------------------------- |
+| `Expression`          | `{expression}`                                      | the kanji character and Lapis dedupe key |
+| `ExpressionFurigana`  | `{furigana-plain}`                                  | plain fallback; normally just the kanji  |
+| `ExpressionReading`   | `{reading}`                                         | empty for multi-reading kanji (expected) |
+| `MainDefinition`      | `{glossary-first}`                                  | the recall keyword (first glossary item) |
+| `Glossary`            | `{glossary}`                                        | full structured detail and learning aids |
+| `Frequency`           | `{frequencies}`                                     | display value from the frequency bank    |
+| `FreqSort`            | `{frequency-harmonic-rank}`                         | numeric rank sort key                    |
+| `Sentence`            | `{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}`   | optional sentence context                |
 
 Fields left unmapped (e.g. `WordAudio`, `SentenceAudio`, `PitchPosition`,
 `Picture`) stay empty — this dictionary intentionally ships no audio or pitch

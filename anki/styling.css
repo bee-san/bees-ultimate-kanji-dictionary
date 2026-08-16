@@ -1,6 +1,6 @@
 /* Minimal, accessible styling for the Bee's Ultimate Kanji Dictionary Lapis
    card. Restrained and compact; honours reduced-motion and never relies on
-   colour alone. The structured {{Meaning}} carries the dictionary's own
+   colour alone. The structured {{Glossary}} carries the dictionary's own
    data-sc-bee-role CSS, so this only styles the surrounding card chrome. */
 .card { font-family: -apple-system, "Noto Sans JP", sans-serif; }
 

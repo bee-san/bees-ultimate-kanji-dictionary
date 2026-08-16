@@ -62,13 +62,36 @@ def test_interrupted_run_fetches_only_missing(tmp_path):
     assert out["男"]["character"] == "男"
 
 
-def test_404_is_skipped_not_cached_as_payload(tmp_path):
+def test_404_is_negatively_cached_for_same_day_resume(tmp_path):
     calls = []
     responses = {"場": {"character": "場"}, "髙": 404}
     out = bk.fetch_all(["場", "髙"], tmp_path, "2026-08-16", make_fetcher(responses, calls))
     assert "場" in out
     assert "髙" not in out                 # 404 skipped
     assert not (tmp_path / "2026-08-16" / bk.cache_filename("髙")).exists()
+    calls.clear()
+    out = bk.fetch_all(["髙"], tmp_path, "2026-08-16", make_fetcher(responses, calls))
+    assert out == {}
+    assert calls == []                     # known daily miss is not requested again
+
+
+def test_sitemap_is_cached_by_utc_day_and_offline_reuses_it(tmp_path):
+    calls = []
+
+    def fetcher():
+        calls.append(True)
+        return ["場", "男"]
+
+    assert bk.fetch_sitemap_cached(tmp_path, "2026-08-16", fetcher) == ["場", "男"]
+    assert bk.fetch_sitemap_cached(tmp_path, "2026-08-16", fetcher, offline=True) == ["場", "男"]
+    assert calls == [True]
+
+
+def test_offline_sitemap_fails_closed_when_daily_cache_is_missing(tmp_path):
+    import pytest
+
+    with pytest.raises(FileNotFoundError):
+        bk.fetch_sitemap_cached(tmp_path, "2026-08-16", offline=True)
 
 
 def test_cache_uses_codepoint_escaping_for_filesystem_safety(tmp_path):

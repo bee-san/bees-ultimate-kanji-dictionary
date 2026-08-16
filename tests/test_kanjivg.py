@@ -31,6 +31,10 @@ SEI_SVG = (
 )
 
 
+def test_kanjivg_downloads_use_an_immutable_source_revision():
+    assert "/61e39cfc29724132a6f8823b166296932985a0ff/kanji" in bk.KANJIVG_BASE
+
+
 def test_parse_stroke_count_and_components():
     info = bk.parse_kanjivg(SEI_SVG, "\u751f")
     assert info["stroke_count"] == 5             # five <path> stroke elements
@@ -64,6 +68,14 @@ def test_sanitize_injects_reduced_motion_guarded_animation():
     assert "prefers-reduced-motion" in out           # reduced-motion guarded
     # final state fully drawn: animation-fill-mode forwards / dashoffset 0 end
     assert "forwards" in out
+
+
+def test_sanitized_strokes_are_visible_without_animation_or_css():
+    out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
+    assert "prefers-reduced-motion:no-preference" in out
+    assert '<path class="bee-stroke" fill="none" stroke="currentColor"' in out
+    default_rule = out.split("@media", 1)[0]
+    assert "stroke-dashoffset:1000" not in default_rule
 
 
 def test_sanitize_deterministic_bytes():

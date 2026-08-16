@@ -12,6 +12,10 @@ import zipfile
 
 import bees_kanji as bk
 
+
+def test_kanjidic2_download_uses_https():
+    assert bk.KANJIDIC2_URL.startswith("https://")
+
 FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 KD2_XML = (FIX / "kanjidic2_sample.xml").read_text(encoding="utf-8")
 CHARS = list("場生")

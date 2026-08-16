@@ -44,6 +44,18 @@ def test_fetch_kanjivg_uses_resumable_dated_cache(tmp_path):
     assert out2 == out1
 
 
+def test_fetch_kanjivg_negatively_caches_daily_404(tmp_path):
+    calls = []
+
+    def missing(ch):
+        calls.append(ch)
+        raise bk.NotFound(ch)
+
+    assert bk.fetch_kanjivg_all(["\u9ad9"], str(tmp_path), "2026-08-16", missing) == {}
+    assert bk.fetch_kanjivg_all(["\u9ad9"], str(tmp_path), "2026-08-16", missing) == {}
+    assert calls == ["\u9ad9"]
+
+
 def test_assemble_enrichment_builds_strokes_phonetics_and_assets():
     svgs = {c: _fake_kvg(c) for c in ["\u6642", "\u6301", "\u751f"]}
     ranks = {"\u6642": 200, "\u6301": 400}

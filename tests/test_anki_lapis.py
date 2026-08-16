@@ -14,8 +14,9 @@ ANKI = pathlib.Path(__file__).resolve().parent.parent / "anki"
 # Yomitan markers this dictionary is capable of populating. Audio / pitch are
 # intentionally excluded (out of scope) and must never appear in the mapping.
 SUPPORTED_MARKERS = {
-    "{expression}", "{reading}", "{glossary}", "{glossary-first}",
-    "{frequency-harmonic-rank}", "{cloze-body}",
+    "{expression}", "{furigana-plain}", "{reading}", "{glossary}",
+    "{glossary-first}", "{frequencies}", "{frequency-harmonic-rank}",
+    "{cloze-prefix}<b>{cloze-body}</b>{cloze-suffix}",
 }
 FORBIDDEN_MARKERS = {"{audio}", "{pitch-accents}", "{pitch-accent-graphs}"}
 
@@ -54,7 +55,11 @@ def test_all_files_present():
 def test_mapping_table_parsed_and_nonempty():
     rows = _mapping_table()
     assert rows, "no | Lapis | marker | rows parsed from anki/README.md"
-    assert "Word" in rows and rows["Word"] == "{expression}"
+    assert rows["Expression"] == "{expression}"
+    assert rows["ExpressionFurigana"] == "{furigana-plain}"
+    assert rows["ExpressionReading"] == "{reading}"
+    assert rows["Frequency"] == "{frequencies}"
+    assert rows["FreqSort"] == "{frequency-harmonic-rank}"
 
 
 def test_every_mapping_marker_is_supported():
@@ -76,6 +81,12 @@ def test_template_fields_are_declared_in_mapping():
     used = _template_fields(_read("front.html")) | _template_fields(_read("back.html"))
     missing = used - declared
     assert not missing, f"template fields not documented in mapping: {missing}"
+
+
+def test_documentation_uses_term_card_path_for_term_bank_entries():
+    doc = _read("README.md")
+    assert "*Term* card type" in doc
+    assert "*Kanji* card type" not in doc
 
 
 def test_templates_have_no_script_or_iframe():
