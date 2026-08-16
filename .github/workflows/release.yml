@@ -66,11 +66,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete "latest" --yes --cleanup-tag || true
-          gh release create "latest" \
+          release_tag="v${{ steps.check.outputs.revision }}"
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null
+          tag_status=$?
+          set -e
+          if [ "$tag_status" -eq 0 ]; then
+            echo "Refusing to reuse existing release tag: $release_tag" >&2
+            exit 1
+          fi
+          test "$tag_status" -eq 2
+          expected_commit="$(git rev-parse HEAD)"
+          git tag "$release_tag" "$expected_commit"
+          git push origin "refs/tags/$release_tag:refs/tags/$release_tag"
+          gh release create "$release_tag" \
             build/bees-ultimate-kanji-dictionary.zip \
             build/MANIFEST.json \
             build/SHA256SUMS \
+            --draft \
+            --verify-tag \
             --title "Bee's Ultimate Kanji Dictionary ${{ steps.check.outputs.revision }}" \
             --notes "Revision ${{ steps.check.outputs.revision }}. Import the ZIP in Yomitan (self-updating). Verify with SHA256SUMS; MANIFEST.json records the source/revision provenance. Bundled licences: LICENSE-data.txt (JMdict/KANJIDIC via Jiten, CC BY-SA) and LICENSE-kanjivg.txt (KanjiVG, CC BY-SA)."
 
@@ -79,9 +93,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          release_tag="v${{ steps.check.outputs.revision }}"
+          expected_commit="$(git rev-parse HEAD)"
+          git fetch --force origin "refs/tags/$release_tag:refs/tags/$release_tag"
+          tag_commit="$(git rev-list -n 1 "$release_tag")"
+          test "$tag_commit" = "$expected_commit"
           mkdir -p verify
-          gh release download "latest" --dir verify --clobber
+          gh release download "$release_tag" --dir verify --clobber
           (cd verify && sha256sum -c SHA256SUMS)
           node scripts/validate_yomitan.mjs verify/bees-ultimate-kanji-dictionary.zip
           # the standalone manifest asset must match the copy bundled in the ZIP
           python -c "import zipfile,sys; b=zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('MANIFEST.json'); s=open('verify/MANIFEST.json','rb').read(); sys.exit(0 if b==s else 'MANIFEST.json mismatch')"
+
+      - name: Publish verified immutable release
+        if: steps.check.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="v${{ steps.check.outputs.revision }}"
+          gh release edit "$release_tag" --draft=false --latest
+          immutable="$(gh api --jq '.immutable' \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
+          test "$immutable" = "true"
+          latest_tag="$(gh api --jq '.tag_name' \
+            "repos/${GITHUB_REPOSITORY}/releases/latest")"
+          test "$latest_tag" = "$release_tag"
+          asset_names="$(gh api --jq '[.assets[].name] | sort | join(" ")' \
+            "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
+          test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"
+          remote_tag_commit="$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)"
+          expected_commit="$(git rev-parse HEAD)"
+          test "$remote_tag_commit" = "$expected_commit"
+          mkdir -p verify-published
+          gh release download "$release_tag" --dir verify-published --clobber
+          (cd verify-published && sha256sum -c SHA256SUMS)
+          for asset in bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS; do
+            cmp "build/$asset" "verify-published/$asset"
+          done

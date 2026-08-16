@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/bee-san/bees-ultimate-kanji-dictionary/releases/download/latest/bees-ultimate-kanji-dictionary.zip"><strong>⬇ Download ZIP</strong></a>
+  <a href="https://github.com/bee-san/bees-ultimate-kanji-dictionary/releases/latest/download/bees-ultimate-kanji-dictionary.zip"><strong>⬇ Download ZIP</strong></a>
   ·
   <a href="https://github.com/bee-san/bees-ultimate-kanji-dictionary/releases/latest">Latest release</a>
   ·
@@ -139,9 +139,9 @@ release URL:
 https://github.com/bee-san/bees-ultimate-kanji-dictionary/releases/latest/download/bees-ultimate-kanji-dictionary.zip
 ```
 
-so you can update in place without losing your other dictionaries. There is
-exactly one canonical ZIP and one `latest` release — the download URL never
-changes across revisions.
+so you can update in place without losing your other dictionaries. Each revision
+uses a fresh immutable version tag; GitHub's `latest` pointer keeps the canonical
+ZIP download URL stable across revisions.
 
 ## What's in a release
 
