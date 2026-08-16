@@ -124,9 +124,59 @@ enriched entry is never weakened or overwritten.
 
 ## Updating
 
-Yomitan offers updates when a newer revision is published: it checks the
-updater index on demand when you run its dictionary update check, so you can
-re-import the newest ZIP in place without losing your other dictionaries.
+The dictionary is self-updating. Its `index.json` sets `isUpdatable` and points
+Yomitan at a stable **auto-update URL**:
+
+```
+https://raw.githubusercontent.com/bee-san/bees-ultimate-kanji-dictionary/main/dist/index.json
+```
+
+Yomitan reads that index on demand when you run its dictionary update check,
+sees the newer `revision`, and re-downloads the canonical ZIP from the stable
+release URL:
+
+```
+https://github.com/bee-san/bees-ultimate-kanji-dictionary/releases/latest/download/bees-ultimate-kanji-dictionary.zip
+```
+
+so you can update in place without losing your other dictionaries. There is
+exactly one canonical ZIP and one `latest` release — the download URL never
+changes across revisions.
+
+## What's in a release
+
+Each `latest` release exposes exactly three files, and nothing else:
+
+- **`bees-ultimate-kanji-dictionary.zip`** — the one canonical Yomitan
+  dictionary (banks, `index.json`, `styles.css`, bundled KanjiVG SVGs, the
+  licence notices, and a bundled copy of `MANIFEST.json`).
+- **`MANIFEST.json`** — a machine-readable **source/revision manifest**: the
+  revision, the revision-independent content hash, the UTC build date, the code
+  git revision, per-source record counts (Jiten authoritative + KANJIDIC2
+  fallback + KanjiVG asset count), and the licences. It is byte-identical to the
+  copy bundled inside the ZIP, so provenance travels with the package offline.
+- **`SHA256SUMS`** — SHA-256 digests for the ZIP and the manifest; verify with
+  `sha256sum -c SHA256SUMS`.
+
+## Limitations (honest)
+
+- **English only.** Glosses and meanings are English; there is no other target
+  language.
+- **KANJIDIC2 fallback entries are plain.** Characters Jiten does not serve
+  carry only what KANJIDIC2 supplies (meanings, on/kun/nanori, stroke count,
+  grade/JLPT) — no example vocabulary, no frequency rank or frequency-bank
+  entry, no reading-distribution donut, and no phonetic family. A KanjiVG stroke
+  diagram is attached only where KanjiVG has one.
+- **No audio and no pitch accent** anywhere, including the Anki templates.
+- **Data is only as fresh as its sources.** Jiten, KANJIDIC2, and KanjiVG are
+  fetched at most once per UTC day; a new release appears only when the
+  normalized content actually changes.
+- **Not a full JMdict/word dictionary.** This is a kanji-focused dictionary;
+  single-character term entries exist so ordinary clicks work, but it is not a
+  general vocabulary dictionary.
+- **Reading-distribution percentages are computed from the examples shown**, not
+  from any authoritative corpus frequency — they reflect the sampled vocabulary
+  in the entry, nothing more.
 
 ## Build it yourself
 
@@ -137,7 +187,7 @@ builds deterministically:
 uv venv && . .venv/bin/activate
 uv pip install -e . jsonschema
 npm install                      # adm-zip + ajv for schema validation
-python -m bees_kanji             # writes build/ + refreshes dist/index.json
+python -m bees_kanji             # writes build/ (ZIP + MANIFEST.json + SHA256SUMS) + refreshes dist/index.json
 ```
 
 - Uses the unauthenticated Jiten API **once per UTC day**. There is no API key.
