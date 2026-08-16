@@ -1148,30 +1148,12 @@ STYLES_CSS = """\
 [data-sc-bee-role="stroke-image"] {
   max-width: 6em;
   max-height: 6em;
-  transform-origin: center;
-  transition: transform 0.15s ease;
 }
 [data-sc-bee-role="stroke-text"] { font-size: 0.9em; opacity: 0.9; }
 
-/* Hover-to-enlarge: a modest CSS-only zoom for inspection, only where a real
-   hover pointer exists (leaves tap/mobile behaviour untouched), scoped to our
-   own dictionary-content image so badges/README/icons/UI are unaffected. The
-   scaled image lifts above siblings so it is visible rather than clipped. */
-@media (hover: hover) {
-  [data-sc-bee-role="stroke-image"]:hover {
-    transform: scale(1.6);
-    position: relative;
-    z-index: 1;
-  }
-}
-
-/* Honour reduced-motion for any bundled animation the viewer might run, and
-   drop the hover-zoom transition so the effect is instant rather than animated. */
+/* Honour reduced-motion for any bundled animation the viewer might run. */
 @media (prefers-reduced-motion: reduce) {
-  [data-sc-bee-role="stroke-image"] {
-    animation: none !important;
-    transition: none;
-  }
+  [data-sc-bee-role="stroke-image"] { animation: none !important; }
 }
 """
 

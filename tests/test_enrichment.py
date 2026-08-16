@@ -94,22 +94,64 @@ def test_styles_css_has_accessibility_and_donut_rules():
     assert "donut" in css.lower()
 
 
-def test_styles_css_hover_zoom_is_scoped_hover_only_and_reduced_motion_safe():
-    """Dictionary-content images (stroke diagrams) get a CSS-only hover zoom.
+def test_styles_css_has_no_hover_zoom_on_stroke_image():
+    """Package contract: NO hover-to-scale zoom on dictionary stroke images.
 
-    The effect must be scoped to our own stroke-image marker (never repo badges,
-    README images, icons, or unrelated UI), only apply where hover is supported,
-    scale up on hover, and drop the transition under prefers-reduced-motion.
+    CSS hover-only image zoom is a GSM Hoshidicts feature, not a Bee's Ultimate
+    Kanji Dictionary one. The emitted STYLES_CSS must contain none of the
+    hover-zoom machinery added by commit 3c2f5d3:
+      - no `@media (hover: hover)` stroke-image hover scale block,
+      - no `scale(1.6)` (or any hover scale-up transform),
+      - no `transform` transition / `transform-origin` added solely for zoom,
+      - no position/z-index added solely to lift the enlarged image.
+
+    Legitimate, unrelated behavior MUST be preserved: bounded stroke-image
+    sizing, KanjiVG stroke animation, progressive disclosure, accessibility
+    text, static fallback, and prefers-reduced-motion animation disabling.
     """
     css = bk.STYLES_CSS
-    # a short transform transition on the dictionary-content image itself
-    assert "transition: transform" in css
-    # hover zoom lives behind an actual hover-capability query, scoped to us
-    hover_block = css[css.index("@media (hover: hover)"):]
-    assert '[data-sc-bee-role="stroke-image"]:hover' in hover_block
-    assert "scale(" in hover_block
-    assert "transform-origin" in css
-    # reduced-motion disables the transform transition for our image
+
+    # --- the hover-zoom must be gone -------------------------------------
+    assert "@media (hover: hover)" not in css
+    assert '[data-sc-bee-role="stroke-image"]:hover' not in css
+    assert "scale(1.6)" not in css
+    assert "transform: scale(" not in css
+    assert "transition: transform" not in css
+    assert "transform-origin" not in css
+
+    # No positioning/z-index bolted onto the stroke image solely for the zoom.
+    si_block = css[css.index('[data-sc-bee-role="stroke-image"] {'):]
+    si_block = si_block[: si_block.index("}") + 1]
+    assert "position:" not in si_block
+    assert "z-index" not in si_block
+
+    # --- legitimate behavior preserved -----------------------------------
+    # bounded stroke-image sizing stays
+    assert "max-width: 6em" in si_block
+    assert "max-height: 6em" in si_block
+    # prefers-reduced-motion still disables bundled animation
     rm_block = css[css.index("@media (prefers-reduced-motion: reduce)"):]
     assert '[data-sc-bee-role="stroke-image"]' in rm_block
-    assert "transition: none" in rm_block
+    assert "animation: none" in rm_block
+
+
+def test_built_zip_styles_css_has_no_hover_zoom():
+    """The public package (built ZIP) must ship no hover-scale CSS.
+
+    Extracts styles.css from a freshly built canonical ZIP and asserts the
+    hover-zoom machinery is absent from what actually reaches users.
+    """
+    import io
+    import zipfile
+
+    b = {"term_bank": [], "term_meta_bank": [], "kanji_bank": [], "kanji_meta_bank": []}
+    raw = bk.build_zip(b, revision="2026.08.16")
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        css = zf.read("styles.css").decode("utf-8")
+
+    assert "@media (hover: hover)" not in css
+    assert '[data-sc-bee-role="stroke-image"]:hover' not in css
+    assert "scale(1.6)" not in css
+    assert "transform: scale(" not in css
+    assert "transition: transform" not in css
+    assert "transform-origin" not in css
