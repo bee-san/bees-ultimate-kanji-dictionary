@@ -99,16 +99,19 @@ def test_zip_members_at_root_with_expected_names():
     z = bk.build_zip(b, revision="2026.08.16")
     with zipfile.ZipFile(io.BytesIO(z)) as zf:
         names = zf.namelist()
+    # Native kanji banks are deliberately NOT shipped (they would route the
+    # kanji-click flow to the unstyleable native renderer). The structured
+    # single-character term entry is the one canonical surface.
     expected = {
         "index.json",
         "term_bank_1.json",
         "term_meta_bank_1.json",
-        "kanji_bank_1.json",
-        "kanji_meta_bank_1.json",
         "styles.css",
         "LICENSE-data.txt",
     }
     assert set(names) == expected
+    assert "kanji_bank_1.json" not in names
+    assert "kanji_meta_bank_1.json" not in names
     for n in names:
         assert "/" not in n  # all at ZIP root, no subfolders
 

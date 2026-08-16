@@ -61,9 +61,18 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
 ## Limitations and data semantics
 
 - **English only.** Glosses and meanings are English.
-- **Kanji-focused, not a full word dictionary.** Single-character term entries
-  exist so ordinary clicks work; it is not a general JMdict vocabulary
-  dictionary.
+- **Kanji-focused, not a full word dictionary.** Each character ships as a
+  single structured **term** entry — that rich card (readings, meanings,
+  vocabulary, and the reading-share donut) is what you see when you scan/hover
+  or search the character, the ordinary lookup path. It is not a general JMdict
+  vocabulary dictionary.
+- **One canonical surface, no native kanji card.** The package deliberately
+  ships no native `kanji_bank`. Yomitan's separate "view kanji" drilldown (the
+  `type=kanji` link) routes only to Yomitan's built-in flat kanji renderer,
+  which dictionary CSS cannot style and which would hide the reading-share
+  donut. With no kanji dictionary shipped, that secondary drilldown simply
+  reports "no results"; the full rich card is always delivered through the
+  ordinary term lookup instead.
 - **No audio and no pitch accent.**
 - **Source freshness is once per UTC day.** Jiten, KANJIDIC2, and KanjiVG are
   fetched at most once daily; a release appears only when normalized content

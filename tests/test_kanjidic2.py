@@ -156,12 +156,15 @@ def test_merged_build_materially_exceeds_jiten_and_stays_valid():
     assert len(merged) == 3
     assert len(merged) > len(jiten)
     banks = bk.build_banks(merged)
-    # every kanji-bank + term-bank entry expression is a single valid scalar
+    # every in-memory kanji-bank + term-bank entry expression is a single scalar
     for entry in banks["kanji_bank"]:
         assert len(entry[0]) == 1
     z = bk.build_zip(banks, revision="2026.01.01")
     with zipfile.ZipFile(io.BytesIO(z)) as zf:
-        kb = json.loads(zf.read("kanji_bank_1.json"))
+        names = zf.namelist()
         tb = json.loads(zf.read("term_bank_1.json"))
-    assert len(kb) == 3
+    # The native kanji bank is deliberately not shipped; the structured term
+    # bank is the single canonical surface and carries every merged character.
+    assert "kanji_bank_1.json" not in names
+    assert "kanji_meta_bank_1.json" not in names
     assert len(tb) == 3

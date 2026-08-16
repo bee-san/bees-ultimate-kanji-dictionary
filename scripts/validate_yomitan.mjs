@@ -41,18 +41,20 @@ const EXPECTED_ROOT = [
   "MANIFEST.json",
   "term_bank_1.json",
   "term_meta_bank_1.json",
-  "kanji_bank_1.json",
-  "kanji_meta_bank_1.json",
   "styles.css",
   "LICENSE-data.txt",
 ];
+
+// Native kanji banks must NOT ship: Yomitan's kanji-click flow routes to the
+// unstyleable native renderer, which would silently supersede the rich
+// structured term card on the user's ordinary lookup path. The structured
+// single-character term entry is the one canonical surface.
+const FORBIDDEN_ROOT = ["kanji_bank_1.json", "kanji_meta_bank_1.json"];
 
 const SCHEMA_FOR = {
   "index.json": "dictionary-index-schema.json",
   "term_bank_1.json": "dictionary-term-bank-v3-schema.json",
   "term_meta_bank_1.json": "dictionary-term-meta-bank-v3-schema.json",
-  "kanji_bank_1.json": "dictionary-kanji-bank-v3-schema.json",
-  "kanji_meta_bank_1.json": "dictionary-kanji-meta-bank-v3-schema.json",
 };
 
 function loadSchema(name) {
@@ -75,6 +77,15 @@ for (const name of names) {
 for (const want of EXPECTED_ROOT) {
   if (!nameSet.has(want)) {
     console.error(`FAIL: missing expected member: ${want}`);
+    ok = false;
+  }
+}
+for (const forbidden of FORBIDDEN_ROOT) {
+  if (nameSet.has(forbidden)) {
+    console.error(
+      `FAIL: forbidden native kanji bank present: ${forbidden} ` +
+        `(would route the kanji-click flow to the unstyleable native renderer)`
+    );
     ok = false;
   }
 }

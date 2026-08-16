@@ -54,10 +54,13 @@ def test_run_build_merges_kanjidic2_fallbacks_into_zip(tmp_path):
     # materially more than the Jiten-only input
     assert len(chars) > len(CHARS)
     with zipfile.ZipFile(io.BytesIO(res["zip_bytes"])) as zf:
-        kb = json.loads(zf.read("kanji_bank_1.json"))
+        names = zf.namelist()
         tb = json.loads(zf.read("term_bank_1.json"))
-    kb_chars = {e[0] for e in kb}
-    assert "唖" in kb_chars and "場" in kb_chars
+    # Native kanji bank is not shipped; the structured term bank is the single
+    # canonical surface and must carry both Jiten and KANJIDIC2-only characters.
+    assert "kanji_bank_1.json" not in names
+    tb_chars = {e[0] for e in tb}
+    assert "唖" in tb_chars and "場" in tb_chars
     # Jiten's enriched 場 entry is untouched: its examples/donut survive
     ba_term = next(e for e in tb if e[0] == "場")
     blob = json.dumps(ba_term, ensure_ascii=False)

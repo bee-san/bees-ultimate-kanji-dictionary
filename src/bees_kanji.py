@@ -945,58 +945,137 @@ def _ruby_node(segments):
     return content
 
 
+def _reading_group_node(label, readings):
+    """Build a labelled reading group whose readings are separate chips.
+
+    Renders as: a small class label ("On"/"Kun") followed by one chip per
+    reading. The label is real text so the On/Kun distinction never depends on
+    colour. Returns None when there are no readings for this class.
+    """
+    if not readings:
+        return None
+    chips = [
+        {"tag": "span", "data": {"beeRole": "reading-chip"}, "content": reading}
+        for reading in readings
+    ]
+    return {
+        "tag": "div",
+        "data": {"beeRole": "reading-group"},
+        "content": [
+            {"tag": "span", "data": {"beeRole": "reading-label"}, "content": label},
+            {"tag": "span", "data": {"beeRole": "reading-chips"}, "content": chips},
+        ],
+    }
+
+
+def _badge_node(text):
+    """A single small metadata badge with real text (e.g. 'Rank 57')."""
+    return {"tag": "span", "data": {"beeRole": "badge"}, "content": text}
+
+
 def _detail_content(record, enrichment=None):
     """Build the structured-content body for a term entry's detail item.
 
-    `enrichment` (optional) adds visual learning aids: a reading-distribution
-    donut computed from the shown examples, plus a keyboard-accessible
-    progressive-disclosure section carrying the phonetic family and stroke-order
-    diagram. Without it the body is exactly the honest legacy content.
+    The card is a coherent, scannable layout rather than a wall of text:
+
+      * a HERO header pairing the kanji glyph with its keyword,
+      * On / Kun readings as separated, labelled chips grouped by class,
+      * a compact meaning line,
+      * a small aligned row of rank / grade / JLPT / stroke badges,
+      * the accessible reading-distribution donut (share of Jiten vocabulary
+        entries by reading -- omitted, never faked, for KANJIDIC2-only records),
+      * common vocabulary grouped by reading with ruby + glosses,
+      * and, when ``enrichment`` supplies them, a keyboard-accessible
+        progressive-disclosure "Learning aids" section carrying the phonetic
+        family and stroke-order diagram.
+
+    Every graphic has a real text equivalent (reading labels, badge text, donut
+    legend), so colour or CSS is never the only carrier of information. Without
+    enrichment the learning-aids section is omitted entirely (never an empty,
+    misleading disclosure).
     """
     char = record["character"]
+    keyword = record["keyword"] or char
     body = []
 
-    # Readings line: honest On / Kun lists as supplied.
-    reading_bits = []
-    if record["on"]:
-        reading_bits.append("On: " + "、".join(record["on"]))
-    if record["kun"]:
-        reading_bits.append("Kun: " + "、".join(record["kun"]))
-    if reading_bits:
-        body.append({"tag": "div", "content": " / ".join(reading_bits)})
+    # Hero header: the glyph paired with its keyword. The glyph is a large,
+    # unambiguous anchor; the keyword names the character in one word.
+    body.append({
+        "tag": "div",
+        "data": {"beeRole": "hero"},
+        "content": [
+            {"tag": "span", "data": {"beeRole": "hero-glyph"},
+             "lang": "ja", "content": char},
+            {"tag": "span", "data": {"beeRole": "hero-keyword"}, "content": keyword},
+        ],
+    })
 
-    # Senses line: compact common meanings.
+    # Readings: On and Kun as separated, labelled chip groups (not a run-on line).
+    reading_groups = []
+    on_group = _reading_group_node("On", record["on"])
+    if on_group is not None:
+        reading_groups.append(on_group)
+    kun_group = _reading_group_node("Kun", record["kun"])
+    if kun_group is not None:
+        reading_groups.append(kun_group)
+    if reading_groups:
+        body.append({
+            "tag": "div",
+            "data": {"beeRole": "readings"},
+            "content": reading_groups,
+        })
+
+    # Meaning: a compact, distinct hierarchy line (not merged with readings).
     if record["senses"]:
-        body.append({"tag": "div", "content": "; ".join(record["senses"])})
+        body.append({
+            "tag": "div",
+            "data": {"beeRole": "meaning"},
+            "content": "; ".join(record["senses"]),
+        })
 
-    # Facts line: rank / grade / jlpt / strokes (only known values).
-    facts = []
+    # Badges: a small aligned row. rank / grade / JLPT / strokes, known only.
+    badges = []
     if record["frequency_rank"] is not None:
-        facts.append(f"Rank {record['frequency_rank']}")
+        badges.append(_badge_node(f"Rank {record['frequency_rank']}"))
     if record["grade"] is not None:
-        facts.append(f"Grade {record['grade']}")
+        badges.append(_badge_node(f"Grade {record['grade']}"))
     jl = _jlpt_label(record["jlpt"])
     if jl:
-        facts.append(f"JLPT {jl}")
+        badges.append(_badge_node(f"JLPT {jl}"))
     if record["stroke_count"] is not None:
-        facts.append(f"{record['stroke_count']} strokes")
-    if facts:
-        body.append({"tag": "div", "content": " · ".join(facts)})
+        badges.append(_badge_node(f"{record['stroke_count']} strokes"))
+    if badges:
+        body.append({
+            "tag": "div",
+            "data": {"beeRole": "badge-row"},
+            "content": badges,
+        })
 
-    # Reading-distribution donut: truthful percentages over the shown examples.
+    # Reading-distribution donut: truthful share of Jiten vocabulary entries by
+    # reading over the full group totals. Omitted (never faked) when absent.
     donut = build_donut_node(record)
     if donut is not None:
         body.append(donut)
 
-    # Example words grouped by reading with honest On/Kun/Other labels.
+    # Example words grouped by reading with honest On/Kun/Other labels + ruby.
     for group in record["examples"]:
         items = []
         for ex in group["words"]:
-            line = _ruby_node(ex["ruby"]) + [" — " + ex["gloss"]]
-            items.append({"tag": "li", "content": line})
+            line = [{"tag": "span", "data": {"beeRole": "vocab-word"},
+                     "content": _ruby_node(ex["ruby"])},
+                    {"tag": "span", "data": {"beeRole": "vocab-gloss"},
+                     "content": " \u2014 " + ex["gloss"]}]
+            items.append({"tag": "li", "data": {"beeRole": "vocab-item"}, "content": line})
         if items:
-            body.append({"tag": "div", "content": group["label"]})
-            body.append({"tag": "ul", "content": items})
+            body.append({
+                "tag": "div",
+                "data": {"beeRole": "vocab-group"},
+                "content": [
+                    {"tag": "div", "data": {"beeRole": "vocab-label"},
+                     "content": group["label"]},
+                    {"tag": "ul", "data": {"beeRole": "vocab-list"}, "content": items},
+                ],
+            })
 
     # Learning aids fold into a keyboard-accessible progressive-disclosure
     # section so the core entry stays compact. Only added when enrichment data
@@ -1191,7 +1270,132 @@ STYLES_CSS = """\
    All rules are scoped to our own data-sc-bee-role markers. Colour is never the
    sole information channel; every graphic has a visible text equivalent. */
 
+/* Restrained reusable token palette: colours and spacing are defined once here
+   and consumed via var() below, so nothing hardcodes a stray magic value. The
+   accent uses the colour-blind-safe Okabe-Ito blue; every token degrades
+   sensibly when a token is missing. currentColor / the viewer's own
+   --background-color and --text-color are preferred so the card inherits
+   Yomitan's active (light or dark) theme rather than fighting it. */
+:root {
+  --bee-accent: #0072b2;
+  --bee-chip-bg: color-mix(in srgb, currentColor 10%, transparent);
+  --bee-chip-border: color-mix(in srgb, currentColor 22%, transparent);
+  --bee-badge-bg: color-mix(in srgb, currentColor 8%, transparent);
+  --bee-muted: color-mix(in srgb, currentColor 65%, transparent);
+  --bee-gap: 0.35em;
+  --bee-radius: 0.4em;
+}
+
 [data-sc-bee-role="detail"] { line-height: 1.5; }
+
+/* Hero header: the glyph is the large unambiguous anchor; the keyword names the
+   character beside it. Real text, so it survives with images/CSS off. */
+[data-sc-bee-role="hero"] {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  flex-wrap: wrap;
+  margin: 0 0 0.4em;
+}
+[data-sc-bee-role="hero-glyph"] {
+  font-size: 2.4em;
+  line-height: 1;
+  font-weight: 600;
+}
+[data-sc-bee-role="hero-keyword"] {
+  font-size: 1.05em;
+  font-weight: 600;
+  color: var(--bee-accent, currentColor);
+}
+
+/* Readings: On / Kun as separated, labelled chip groups. The class label is
+   real text so the On/Kun distinction never depends on colour. Chips wrap in a
+   narrow popup instead of overflowing. */
+[data-sc-bee-role="readings"] { margin: 0.3em 0; }
+[data-sc-bee-role="reading-group"] {
+  display: flex;
+  align-items: baseline;
+  gap: var(--bee-gap, 0.35em);
+  flex-wrap: wrap;
+  margin: 0.15em 0;
+}
+[data-sc-bee-role="reading-label"] {
+  font-size: 0.8em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bee-muted, currentColor);
+  min-width: 2.2em;
+}
+[data-sc-bee-role="reading-chips"] {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--bee-gap, 0.35em);
+}
+[data-sc-bee-role="reading-chip"] {
+  display: inline-block;
+  padding: 0.05em 0.5em;
+  border: 1px solid var(--bee-chip-border, currentColor);
+  border-radius: 999px;
+  background: var(--bee-chip-bg, transparent);
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+
+/* Meaning: a distinct, compact hierarchy line -- not merged with readings. */
+[data-sc-bee-role="meaning"] { margin: 0.3em 0; }
+
+/* Badges: a small aligned, wrapping row of metadata pills. */
+[data-sc-bee-role="badge-row"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bee-gap, 0.35em);
+  margin: 0.3em 0;
+}
+[data-sc-bee-role="badge"] {
+  display: inline-block;
+  padding: 0.05em 0.45em;
+  border-radius: var(--bee-radius, 0.4em);
+  background: var(--bee-badge-bg, transparent);
+  font-size: 0.8em;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--bee-muted, currentColor);
+}
+
+/* Vocabulary grouped by reading: readable ruby, quiet glosses. */
+[data-sc-bee-role="vocab-group"] { margin: 0.4em 0; }
+[data-sc-bee-role="vocab-label"] {
+  font-size: 0.8em;
+  font-weight: 700;
+  color: var(--bee-muted, currentColor);
+  margin: 0.2em 0 0.1em;
+}
+[data-sc-bee-role="vocab-list"] { margin: 0; padding-left: 1.1em; }
+[data-sc-bee-role="vocab-item"] { margin: 0.1em 0; }
+[data-sc-bee-role="vocab-word"] ruby rt { font-size: 0.7em; }
+[data-sc-bee-role="vocab-gloss"] { color: var(--bee-muted, currentColor); }
+
+/* Dark theme: derive slightly stronger separators so chips/badges stay legible
+   on a dark background, and never paint a solid white card. The card inherits
+   the viewer's background/text; only our token separators strengthen. */
+@media (prefers-color-scheme: dark) {
+  [data-sc-bee-role="detail"] {
+    --bee-accent: #56b4e9;
+    --bee-chip-border: color-mix(in srgb, currentColor 38%, transparent);
+    --bee-chip-bg: color-mix(in srgb, currentColor 16%, transparent);
+    --bee-badge-bg: color-mix(in srgb, currentColor 14%, transparent);
+  }
+}
+
+/* Narrow / mobile-sized popups: let the hero, chips, badges, and the donut
+   legend stack instead of overflowing a compact pane. */
+@media (max-width: 24em) {
+  [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
+  [data-sc-bee-role="reading-group"] { align-items: flex-start; }
+  [data-sc-bee-role="donut-ring"] { display: block; margin: 0 auto 0.4em; }
+  [data-sc-bee-role="donut-legend"] { display: block; }
+}
 
 /* Progressive disclosure: restrained, keyboard-focusable summaries. */
 [data-sc-bee-role="section"] > summary {
@@ -1265,11 +1469,19 @@ STYLES_CSS = """\
 }
 """
 
+# Only the structured single-character TERM banks ship. The native
+# kanji_bank/kanji_meta_bank are deliberately NOT packaged: Yomitan's
+# kanji-click / "view kanji" flow routes exclusively to the native kanji
+# renderer (a fixed Meaning/Readings table dictionary CSS cannot restyle), so a
+# shipped kanji_bank silently supersedes the rich structured card on the user's
+# ordinary lookup path. Dropping it makes the structured term entry the single
+# canonical visible surface for every character (verified against real Yomitan
+# 26.7.29.0 in parent task t_08284e0e). build_banks still produces the kanji
+# banks in-memory for unit coverage, but this table is the shipped/hashed set,
+# so nothing reintroduces a competing flat entry.
 BANK_FILES = [
     ("term_bank_1.json", "term_bank"),
     ("term_meta_bank_1.json", "term_meta_bank"),
-    ("kanji_bank_1.json", "kanji_bank"),
-    ("kanji_meta_bank_1.json", "kanji_meta_bank"),
 ]
 
 
