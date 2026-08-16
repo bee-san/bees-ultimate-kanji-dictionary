@@ -1,0 +1,20 @@
+Stroke-order diagrams and phonetic-component (kvg:phon) relationships bundled by
+Bee's Ultimate Kanji Dictionary are derived from KanjiVG.
+
+    KanjiVG -- Copyright (C) 2009-2011 Ulrich Apel
+    https://kanjivg.tagaini.net/
+
+KanjiVG is distributed under the Creative Commons Attribution-Share Alike 3.0
+licence: https://creativecommons.org/licenses/by-sa/3.0/
+
+The SVG files bundled in each release ZIP under kanjivg/ are adaptations of the
+original KanjiVG data: the stroke <path> geometry is extracted and re-styled
+with a lightweight, dependency-free CSS stroke-order animation (reduced-motion
+guarded, static fully-drawn glyph as the fallback). All KanjiVG-specific markup
+(kvg: namespaced attributes, stroke-number labels, DOCTYPE, comments) is removed
+during sanitization.
+
+In accordance with the Share-Alike term, these adaptations are redistributed
+under the same Creative Commons Attribution-Share Alike licence. The phonetic
+families surfaced in entries are read directly from KanjiVG's own kvg:phon
+markers; no phonetic relationship is inferred or invented.
