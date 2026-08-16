@@ -1,0 +1,44 @@
+{
+  "character": "苺",
+  "onReadings": [
+    "バイ"
+  ],
+  "kunReadings": [
+    "いちご"
+  ],
+  "meanings": [
+    "strawberry"
+  ],
+  "strokeCount": 8,
+  "jlptLevel": null,
+  "grade": null,
+  "frequencyRank": null,
+  "topWords": [
+    {
+      "wordId": 50,
+      "readingIndex": 0,
+      "reading": "苺",
+      "readingFurigana": "苺[いちご]",
+      "mainDefinition": "strawberry",
+      "frequencyRank": 60000,
+      "matchSurface": null
+    }
+  ],
+  "wordsByReading": [
+    {
+      "reading": "いちご",
+      "totalWords": 3,
+      "words": [
+        {
+          "wordId": 51,
+          "readingIndex": 0,
+          "reading": "苺",
+          "readingFurigana": "苺[いちご]",
+          "mainDefinition": "strawberry",
+          "frequencyRank": 60000,
+          "matchSurface": null
+        }
+      ]
+    }
+  ]
+}

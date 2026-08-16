@@ -1,0 +1,15 @@
+# Generated working files
+/cache/
+/build/
+/out/
+*.zip
+SHA256SUMS
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node
+node_modules/

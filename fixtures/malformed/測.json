@@ -1,0 +1,94 @@
+{
+  "character": "測",
+  "onReadings": [
+    "ソク",
+    "ソク",
+    ""
+  ],
+  "kunReadings": [
+    "はか.る",
+    "  "
+  ],
+  "meanings": [
+    "  missing ",
+    "measure",
+    "measure",
+    "???",
+    "fathom",
+    "<b>plumb</b>"
+  ],
+  "strokeCount": 12,
+  "jlptLevel": 1,
+  "grade": 5,
+  "frequencyRank": 1560,
+  "topWords": [
+    {
+      "wordId": 1,
+      "readingIndex": 0,
+      "reading": "測定",
+      "readingFurigana": "測[そく]定[てい]",
+      "mainDefinition": "measurement",
+      "frequencyRank": 2000,
+      "matchSurface": null
+    },
+    {
+      "wordId": 2,
+      "readingIndex": 0,
+      "reading": "",
+      "readingFurigana": "",
+      "mainDefinition": "",
+      "frequencyRank": 5,
+      "matchSurface": null
+    }
+  ],
+  "wordsByReading": [
+    {
+      "reading": "そく",
+      "totalWords": 400,
+      "words": [
+        {
+          "wordId": 10,
+          "readingIndex": 0,
+          "reading": "推測",
+          "readingFurigana": "推[すい]測[そく]",
+          "mainDefinition": "guess",
+          "frequencyRank": 3200,
+          "matchSurface": null
+        },
+        {
+          "wordId": 11,
+          "readingIndex": 0,
+          "reading": "測定器",
+          "readingFurigana": "測[そく]定[てい]器[き]",
+          "mainDefinition": "<i>gauge</i>",
+          "frequencyRank": 40000,
+          "matchSurface": null
+        },
+        {
+          "wordId": 12,
+          "readingIndex": 0,
+          "reading": "junk",
+          "readingFurigana": "bad[ruby",
+          "mainDefinition": "missing",
+          "frequencyRank": 900,
+          "matchSurface": null
+        }
+      ]
+    },
+    {
+      "reading": "はか",
+      "totalWords": 20,
+      "words": [
+        {
+          "wordId": 20,
+          "readingIndex": 0,
+          "reading": "測る",
+          "readingFurigana": "測[はか]る",
+          "mainDefinition": "to measure",
+          "frequencyRank": 5400,
+          "matchSurface": null
+        }
+      ]
+    }
+  ]
+}

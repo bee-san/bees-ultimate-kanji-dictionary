@@ -1,0 +1,5 @@
+Dictionary data derived from Jiten (https://jiten.moe), using JMdict/KANJIDIC
+data from the Electronic Dictionary Research and Development Group (EDRDG).
+Data is redistributed under CC BY-SA 4.0; see
+https://creativecommons.org/licenses/by-sa/4.0/ and
+https://www.edrdg.org/edrdg/licence.html.
