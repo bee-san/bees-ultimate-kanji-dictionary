@@ -4,7 +4,11 @@ One module owns the whole pipeline: fetch -> normalize -> validate -> build.
 Kept small and understandable on purpose. No service layers, no plugins.
 """
 
+import hashlib
+import io
+import json
 import re
+import zipfile
 
 # --- Reading normalization ---------------------------------------------------
 
@@ -456,3 +460,95 @@ def build_banks(records, aliases=None):
         "kanji_bank": kanji_bank,
         "kanji_meta_bank": kanji_meta_bank,
     }
+
+
+# --- Serialization, index, hashing, ZIP --------------------------------------
+
+TITLE = "Bee's Ultimate Kanji Dictionary"
+REPO = "bee-san/bees-ultimate-kanji-dictionary"
+ZIP_NAME = "bees-ultimate-kanji-dictionary.zip"
+
+ATTRIBUTION = (
+    "Dictionary data derived from Jiten (https://jiten.moe), using "
+    "JMdict/KANJIDIC data from the Electronic Dictionary Research and "
+    "Development Group (EDRDG). Data is redistributed under CC BY-SA 4.0; "
+    "see https://creativecommons.org/licenses/by-sa/4.0/ and "
+    "https://www.edrdg.org/edrdg/licence.html."
+)
+
+LICENSE_DATA_TEXT = (
+    "Dictionary data derived from Jiten (https://jiten.moe), using JMdict/KANJIDIC\n"
+    "data from the Electronic Dictionary Research and Development Group (EDRDG).\n"
+    "Data is redistributed under CC BY-SA 4.0; see\n"
+    "https://creativecommons.org/licenses/by-sa/4.0/ and\n"
+    "https://www.edrdg.org/edrdg/licence.html.\n"
+)
+
+BANK_FILES = [
+    ("term_bank_1.json", "term_bank"),
+    ("term_meta_bank_1.json", "term_meta_bank"),
+    ("kanji_bank_1.json", "kanji_bank"),
+    ("kanji_meta_bank_1.json", "kanji_meta_bank"),
+]
+
+
+def dump_json(obj):
+    """Serialize to canonical, deterministic UTF-8 JSON (no ASCII escaping)."""
+    return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def build_index(revision):
+    """Build the Yomitan index.json object with the frozen stable fields."""
+    return {
+        "title": TITLE,
+        "format": 3,
+        "revision": revision,
+        "sequenced": False,
+        "author": "bee-san",
+        "isUpdatable": True,
+        "indexUrl": f"https://raw.githubusercontent.com/{REPO}/main/dist/index.json",
+        "downloadUrl": f"https://github.com/{REPO}/releases/latest/download/{ZIP_NAME}",
+        "url": f"https://github.com/{REPO}",
+        "description": "Minimal kanji dictionary generated from Jiten data.",
+        "attribution": ATTRIBUTION,
+        "sourceLanguage": "ja",
+        "targetLanguage": "en",
+        "frequencyMode": "rank-based",
+    }
+
+
+def content_hash(banks):
+    """SHA-256 over the normalized bank content only (revision-independent)."""
+    payload = dump_json({name: banks[name] for _, name in BANK_FILES})
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# Fixed ZIP member metadata for reproducible archives.
+_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+
+
+def _zip_member(name, data):
+    info = zipfile.ZipInfo(filename=name, date_time=_ZIP_DATE)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = (0o644 & 0xFFFF) << 16  # -rw-r--r--
+    info.create_system = 3  # unix
+    return info, data
+
+
+def build_zip(banks, revision):
+    """Build a deterministic Yomitan ZIP (bytes) with all members at the root.
+
+    Member order, timestamps, and permissions are fixed so two builds from the
+    same inputs are byte-identical.
+    """
+    members = [("index.json", dump_json(build_index(revision)))]
+    for filename, key in BANK_FILES:
+        members.append((filename, dump_json(banks[key])))
+    members.append(("LICENSE-data.txt", LICENSE_DATA_TEXT))
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, text in members:
+            info, data = _zip_member(name, text.encode("utf-8"))
+            zf.writestr(info, data)
+    return buf.getvalue()
