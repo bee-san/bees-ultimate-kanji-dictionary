@@ -34,12 +34,23 @@ def test_obsolete_conic_gradient_ring_css_removed():
     assert 'data-sc-bee-role="donut-hole"' not in CSS
 
 
-def test_chart_image_is_bounded_and_scoped():
-    # The base reading-chart rule bounds the packaged PNG with an explicit
-    # width + max-width (the narrow media-query override only restacks it).
-    assert '[data-sc-bee-role="reading-chart"]' in CSS
-    assert "width: 4.6em" in CSS
-    assert "max-width: 40%" in CSS
+def test_chart_image_is_bounded_via_preserved_wrappers():
+    # Real Yomitan (structured-content-generator.js createDefinitionImage)
+    # DISCARDS the data attributes on an <img> node: the chart image is rendered
+    # as  a.gloss-image-link > span.gloss-image-container > canvas.gloss-image,
+    # and none of those carry data-sc-bee-role. So the chart must be bounded by
+    # targeting the PRESERVED .gloss-image-* wrappers, scoped under our own
+    # donut-graphic wrapper (which IS preserved, being a <div>, not an <img>).
+    assert '[data-sc-bee-role="donut-graphic"] .gloss-image-container' in CSS, \
+        "chart size must target the preserved .gloss-image-container wrapper"
+    graphic = _rule('[data-sc-bee-role="donut-graphic"] .gloss-image-container')
+    assert "max-width:" in graphic, "chart must have a max-width so it cannot overflow a narrow popup"
+
+
+def test_no_dead_image_data_attribute_selectors():
+    # We must NOT ship selectors on the <img>'s own data attribute -- Yomitan
+    # discards those, so any rule keyed on the image data-sc marker is dead CSS.
+    assert '[data-sc-bee-role="reading-chart"]' not in CSS
 
 
 def test_dark_theme_still_present():

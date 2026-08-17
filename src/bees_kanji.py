@@ -1039,7 +1039,8 @@ def _reading_group_node(label, readings):
     if not readings:
         return None
     chips = [
-        {"tag": "span", "data": {"beeRole": "reading-chip"}, "content": reading}
+        {"tag": "span", "data": {"beeRole": "reading-chip"}, "lang": "ja",
+         "content": reading}
         for reading in readings
     ]
     return {
@@ -1472,8 +1473,12 @@ STYLES_CSS = """\
    accent uses the colour-blind-safe Okabe-Ito blue; every token degrades
    sensibly when a token is missing. currentColor / the viewer's own
    --background-color and --text-color are preferred so the card inherits
-   Yomitan's active (light or dark) theme rather than fighting it. */
-:root {
+   Yomitan's active (light or dark) theme rather than fighting it.
+
+   The tokens are scoped to our own detail wrapper (never the document root) so
+   our custom properties never leak into Yomitan's chrome or any other
+   dictionary's structured content -- the whole card stays self-contained. */
+[data-sc-bee-role="detail"] {
   --bee-accent: #0072b2;
   --bee-chip-bg: color-mix(in srgb, currentColor 10%, transparent);
   --bee-chip-border: color-mix(in srgb, currentColor 22%, transparent);
@@ -1481,9 +1486,8 @@ STYLES_CSS = """\
   --bee-muted: color-mix(in srgb, currentColor 65%, transparent);
   --bee-gap: 0.35em;
   --bee-radius: 0.4em;
+  line-height: 1.5;
 }
-
-[data-sc-bee-role="detail"] { line-height: 1.5; }
 
 /* Hero header: the glyph is the large unambiguous anchor; the keyword names the
    character beside it. Real text, so it survives with images/CSS off. */
@@ -1625,7 +1629,7 @@ STYLES_CSS = """\
   [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
-  [data-sc-bee-role="reading-chart"] { display: block; margin: 0 auto 0.4em; }
+  [data-sc-bee-role="donut-graphic"] { display: block; margin: 0 auto 0.4em; }
   [data-sc-bee-role="donut-legend"] { display: block; }
 }
 
@@ -1642,17 +1646,29 @@ STYLES_CSS = """\
 
 /* Reading-distribution chart: a packaged raster PNG (donut) plus a visible text
    legend carrying the same data. The image is bounded and scoped; the caption
-   and legend degrade gracefully if the image cannot load. */
+   and legend degrade gracefully if the image cannot load.
+
+   IMPORTANT: real Yomitan renders a structured-content <img> as
+     a.gloss-image-link > span.gloss-image-container > canvas.gloss-image
+   and DISCARDS the data attributes on the <img> itself. So the chart cannot be
+   sized via its own data-sc marker -- we bound the PRESERVED .gloss-image-*
+   wrappers, scoped under our own donut-graphic <div> (a div IS preserved with
+   its data-sc marker, unlike the img). */
 [data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
 [data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; }
-[data-sc-bee-role="donut-graphic"] { display: inline-block; vertical-align: middle; }
-[data-sc-bee-role="reading-chart"] {
+[data-sc-bee-role="donut-graphic"] {
   display: inline-block;
-  width: 4.6em;
-  height: 4.6em;
-  max-width: 40%;
   vertical-align: middle;
   margin-right: 0.6em;
+}
+[data-sc-bee-role="donut-graphic"] .gloss-image-link {
+  display: inline-block;
+  vertical-align: middle;
+}
+[data-sc-bee-role="donut-graphic"] .gloss-image-container {
+  width: 4.6em;
+  max-width: 40%;
+  vertical-align: middle;
 }
 [data-sc-bee-role="donut-legend"] {
   display: inline-block;
@@ -1676,8 +1692,10 @@ STYLES_CSS = """\
 [data-sc-bee-role="phonetic-family"] { font-size: 0.95em; opacity: 0.9; }
 [data-sc-bee-role="phon-source"] { opacity: 0.65; font-size: 0.85em; }
 
-/* Stroke-order diagram: bounded, centred, with a text fallback beneath it. */
-[data-sc-bee-role="stroke-image"] {
+/* Stroke-order diagram: bounded, centred, with a text fallback beneath it.
+   Same rendering contract as the chart -- bound the preserved wrapper Yomitan
+   builds around the img, scoped under our own stroke-order <div>. */
+[data-sc-bee-role="stroke-order"] .gloss-image-container {
   max-width: 6em;
   max-height: 6em;
 }
@@ -1685,7 +1703,7 @@ STYLES_CSS = """\
 
 /* Honour reduced-motion for any bundled animation the viewer might run. */
 @media (prefers-reduced-motion: reduce) {
-  [data-sc-bee-role="stroke-image"] { animation: none !important; }
+  [data-sc-bee-role="stroke-order"] .gloss-image { animation: none !important; }
 }
 """
 

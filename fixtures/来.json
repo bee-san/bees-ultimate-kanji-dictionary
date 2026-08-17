@@ -1,0 +1,62 @@
+{
+ "character": "来",
+ "onReadings": ["ライ", "タイ"],
+ "kunReadings": ["く.る", "きた.る", "きた.す", "き.たす", "き.たる", "き", "こ"],
+ "meanings": ["come", "due", "next", "cause", "become"],
+ "strokeCount": 7,
+ "jlptLevel": 4,
+ "grade": 2,
+ "frequencyRank": 102,
+ "topWords": [
+  {"wordId": 1547720, "readingIndex": 0, "reading": "来る", "readingFurigana": "来[く]る", "mainDefinition": "to come", "frequencyRank": 195, "matchSurface": null},
+  {"wordId": 1547730, "readingIndex": 0, "reading": "来年", "readingFurigana": "来[らい]年[ねん]", "mainDefinition": "next year", "frequencyRank": 402, "matchSurface": null},
+  {"wordId": 1310110, "readingIndex": 0, "reading": "出来る", "readingFurigana": "出[で]来[き]る", "mainDefinition": "to be able to", "frequencyRank": 421, "matchSurface": null},
+  {"wordId": 1611040, "readingIndex": 0, "reading": "将来", "readingFurigana": "将[しょう]来[らい]", "mainDefinition": "future", "frequencyRank": 604, "matchSurface": null},
+  {"wordId": 1528870, "readingIndex": 0, "reading": "未来", "readingFurigana": "未[み]来[らい]", "mainDefinition": "the future", "frequencyRank": 1104, "matchSurface": null},
+  {"wordId": 1547740, "readingIndex": 0, "reading": "来週", "readingFurigana": "来[らい]週[しゅう]", "mainDefinition": "next week", "frequencyRank": 1327, "matchSurface": null},
+  {"wordId": 1547700, "readingIndex": 0, "reading": "来店", "readingFurigana": "来[らい]店[てん]", "mainDefinition": "visiting a store", "frequencyRank": 2894, "matchSurface": null},
+  {"wordId": 1547660, "readingIndex": 0, "reading": "来客", "readingFurigana": "来[らい]客[きゃく]", "mainDefinition": "visitor", "frequencyRank": 3560, "matchSurface": null},
+  {"wordId": 1246890, "readingIndex": 0, "reading": "以来", "readingFurigana": "以[い]来[らい]", "mainDefinition": "since", "frequencyRank": 1522, "matchSurface": null},
+  {"wordId": 1547690, "readingIndex": 0, "reading": "来場", "readingFurigana": "来[らい]場[じょう]", "mainDefinition": "attendance", "frequencyRank": 4820, "matchSurface": null},
+  {"wordId": 1922330, "readingIndex": 0, "reading": "来たる", "readingFurigana": "来[きた]る", "mainDefinition": "to come", "frequencyRank": 8410, "matchSurface": null},
+  {"wordId": 1547680, "readingIndex": 0, "reading": "来日", "readingFurigana": "来[らい]日[にち]", "mainDefinition": "arrival in Japan", "frequencyRank": 5133, "matchSurface": null}
+ ],
+ "wordsByReading": [
+  {
+   "reading": "らい",
+   "totalWords": 1820,
+   "words": [
+    {"wordId": 1547730, "readingIndex": 0, "reading": "来年", "readingFurigana": "来[らい]年[ねん]", "mainDefinition": "next year", "frequencyRank": 402, "matchSurface": null},
+    {"wordId": 1611040, "readingIndex": 0, "reading": "将来", "readingFurigana": "将[しょう]来[らい]", "mainDefinition": "future", "frequencyRank": 604, "matchSurface": null},
+    {"wordId": 1528870, "readingIndex": 0, "reading": "未来", "readingFurigana": "未[み]来[らい]", "mainDefinition": "the future", "frequencyRank": 1104, "matchSurface": null},
+    {"wordId": 1547740, "readingIndex": 0, "reading": "来週", "readingFurigana": "来[らい]週[しゅう]", "mainDefinition": "next week", "frequencyRank": 1327, "matchSurface": null},
+    {"wordId": 1246890, "readingIndex": 0, "reading": "以来", "readingFurigana": "以[い]来[らい]", "mainDefinition": "since", "frequencyRank": 1522, "matchSurface": null},
+    {"wordId": 1547700, "readingIndex": 0, "reading": "来店", "readingFurigana": "来[らい]店[てん]", "mainDefinition": "visiting a store", "frequencyRank": 2894, "matchSurface": null},
+    {"wordId": 1547660, "readingIndex": 0, "reading": "来客", "readingFurigana": "来[らい]客[きゃく]", "mainDefinition": "visitor", "frequencyRank": 3560, "matchSurface": null},
+    {"wordId": 1547690, "readingIndex": 0, "reading": "来場", "readingFurigana": "来[らい]場[じょう]", "mainDefinition": "attendance", "frequencyRank": 4820, "matchSurface": null},
+    {"wordId": 1547680, "readingIndex": 0, "reading": "来日", "readingFurigana": "来[らい]日[にち]", "mainDefinition": "arrival in Japan", "frequencyRank": 5133, "matchSurface": null}
+   ]
+  },
+  {
+   "reading": "く",
+   "totalWords": 640,
+   "words": [
+    {"wordId": 1547720, "readingIndex": 0, "reading": "来る", "readingFurigana": "来[く]る", "mainDefinition": "to come", "frequencyRank": 195, "matchSurface": null}
+   ]
+  },
+  {
+   "reading": "き",
+   "totalWords": 210,
+   "words": [
+    {"wordId": 1310110, "readingIndex": 0, "reading": "出来る", "readingFurigana": "出[で]来[き]る", "mainDefinition": "to be able to", "frequencyRank": 421, "matchSurface": null}
+   ]
+  },
+  {
+   "reading": "きた",
+   "totalWords": 44,
+   "words": [
+    {"wordId": 1922330, "readingIndex": 0, "reading": "来たる", "readingFurigana": "来[きた]る", "mainDefinition": "to come", "frequencyRank": 8410, "matchSurface": null}
+   ]
+  }
+ ]
+}

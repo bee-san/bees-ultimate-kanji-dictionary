@@ -132,7 +132,9 @@ def test_styles_css_has_no_hover_zoom_on_stroke_image():
     assert "transform-origin" not in css
 
     # No positioning/z-index bolted onto the stroke image solely for the zoom.
-    si_block = css[css.index('[data-sc-bee-role="stroke-image"] {'):]
+    # (Yomitan discards the <img> data attribute, so the stroke image is bounded
+    # via the preserved .gloss-image-container wrapper under our stroke-order div.)
+    si_block = css[css.index('[data-sc-bee-role="stroke-order"] .gloss-image-container {'):]
     si_block = si_block[: si_block.index("}") + 1]
     assert "position:" not in si_block
     assert "z-index" not in si_block
@@ -143,7 +145,7 @@ def test_styles_css_has_no_hover_zoom_on_stroke_image():
     assert "max-height: 6em" in si_block
     # prefers-reduced-motion still disables bundled animation
     rm_block = css[css.index("@media (prefers-reduced-motion: reduce)"):]
-    assert '[data-sc-bee-role="stroke-image"]' in rm_block
+    assert '[data-sc-bee-role="stroke-order"] .gloss-image' in rm_block
     assert "animation: none" in rm_block
 
 

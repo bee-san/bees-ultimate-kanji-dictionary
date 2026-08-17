@@ -22,12 +22,26 @@ import bees_kanji as bk
 CSS = bk.STYLES_CSS
 
 
+def _rule(selector):
+    start = CSS.index(selector)
+    return CSS[start: CSS.index("}", start) + 1]
+
+
 def test_defines_a_reusable_token_palette():
     # Colours/spacing are defined once as custom properties and reused.
-    assert ":root" in CSS
     assert "--bee-" in CSS
     # at least one rule consumes a token via var()
     assert "var(--bee-" in CSS
+
+
+def test_base_tokens_scoped_to_detail_wrapper_not_root():
+    # The base --bee-* token palette must be defined on our own detail wrapper,
+    # NOT on :root -- a :root block leaks our custom properties into Yomitan's
+    # chrome and every other dictionary's structured content. Scoping the tokens
+    # to [data-sc-bee-role="detail"] keeps the whole card self-contained.
+    assert ":root" not in CSS, ":root leaks tokens globally; scope to the detail wrapper"
+    detail_rule = _rule('[data-sc-bee-role="detail"]')
+    assert "--bee-accent:" in detail_rule, "base --bee-accent token must live on the detail wrapper"
 
 
 def test_styles_scoped_to_our_markers_only():
@@ -71,11 +85,13 @@ def test_keyboard_focus_visible_on_expandable_section():
 
 
 def test_reduced_motion_and_bounded_stroke_image_preserved():
-    # regression guard for the existing accessibility contract
+    # regression guard for the existing accessibility contract. Yomitan discards
+    # the <img> data attribute, so the stroke diagram is bounded via the
+    # preserved .gloss-image-container wrapper scoped under our stroke-order div.
     assert "@media (prefers-reduced-motion: reduce)" in CSS
-    si = CSS[CSS.index('[data-sc-bee-role="stroke-image"] {'):]
+    si = CSS[CSS.index('[data-sc-bee-role="stroke-order"] .gloss-image-container {'):]
     si = si[: si.index("}") + 1]
-    assert "max-width: 6em" in si and "max-height: 6em" in si
+    assert "max-width: 6em" in si
 
 
 def test_no_hover_zoom_machinery():
