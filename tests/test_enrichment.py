@@ -99,11 +99,12 @@ def test_zip_deterministic_with_assets():
     assert z1 == z2  # member order fixed regardless of dict insertion order
 
 
-def test_styles_css_has_accessibility_and_donut_rules():
+def test_styles_css_has_accessibility_and_reading_distribution_rules():
     css = bk.STYLES_CSS
     assert "prefers-reduced-motion" in css
     assert "data-sc-bee-role" in css       # scopes to our structured content
-    assert "donut" in css.lower()
+    assert "reading-distribution" in css.lower()
+    assert "donut" not in css.lower()      # no chart/graphic CSS survives
 
 
 def test_styles_css_has_no_hover_zoom_on_stroke_image():

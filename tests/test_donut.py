@@ -1,13 +1,13 @@
-"""RED tests: reading-share donut derived from complete Jiten group totals.
+"""Reading-share statistic derived from complete Jiten group totals.
 
 The statistic is a share of Jiten VOCABULARY ENTRIES by reading -- computed from
 every valid ``wordsByReading[].totalWords`` group total (the complete Jiten
 vocabulary-entry count for that reading), NOT the 1-2 example words displayed in
 the entry. Percentages are truthful integer shares summing to exactly 100 via
 largest-remainder rounding, reproducible, capped at a sensible segment count
-with an explicit "Other" tail, and rendered with a visible text legend plus a
-semantic fallback so nothing depends on colour or CSS alone. When no valid group
-total exists the statistic is omitted entirely rather than faked from examples.
+with an explicit "Other" tail, and rendered as a plain text list (no graphic).
+When no valid group total exists the statistic is omitted entirely rather than
+faked from examples.
 """
 import json
 import pathlib
@@ -86,7 +86,7 @@ def test_distribution_caps_segments_with_explicit_other():
     # the remaining tail into one explicit "Other" segment.
     r = rec("生.json")
     dist = bk.reading_distribution(r)
-    assert len(dist["segments"]) == bk.MAX_DONUT_SEGMENTS
+    assert len(dist["segments"]) == bk.MAX_READING_SEGMENTS
     readings = [s["reading"] for s in dist["segments"][:4]]
     assert readings == ["せい", "お", "う", "しょう"]
     other = dist["segments"][-1]
@@ -119,9 +119,9 @@ def test_duplicate_labels_aggregate_deterministically():
     assert by_reading == {"じょう": 105, "ば": 20}
 
 
-def test_chart_node_has_concise_title_and_legend():
+def test_distribution_node_has_concise_title_and_text_list():
     r = rec("生.json")
-    node = bk.build_reading_chart_node(r)
+    node = bk.build_reading_distribution_node(r)
     blob = json.dumps(node, ensure_ascii=False)
     assert "Reading distribution" in blob
     assert "Counts distinct Jiten vocabulary" not in blob
@@ -132,7 +132,7 @@ def test_chart_node_has_concise_title_and_legend():
     for banned in ("usage frequency", "token frequency", "corpus", "probability",
                    "most used", "pronunciation", "real-world frequency", "chance"):
         assert banned not in scan, banned
-    # a visible textual legend with percentages and exact entry counts exists
+    # a visible textual list with percentages and exact entry counts exists
     assert "%" in blob
     assert "entries" in blob or "entry" in blob
     dist = bk.reading_distribution(r)
@@ -141,26 +141,28 @@ def test_chart_node_has_concise_title_and_legend():
             assert seg["reading"] in blob
     assert '"tag": "ul"' in blob
     assert "ariaLabel" not in blob and "ariaHidden" not in blob
-    # the graphic is a packaged raster PNG referenced by archive path (not conic)
+    # NO graphic of any kind: no packaged raster, no conic gradient, no img.
     assert "conic-gradient" not in blob
-    assert bk.reading_distribution_asset_name("生") in blob
+    assert ".png" not in blob.lower()
+    assert '"tag": "img"' not in blob
+    assert "reading-distribution/" not in blob
 
 
-def test_chart_legend_shows_reading_class_percent_and_count():
+def test_distribution_list_shows_reading_class_percent_and_count():
     r = rec("場.json")
-    node = bk.build_reading_chart_node(r)
+    node = bk.build_reading_distribution_node(r)
     blob = json.dumps(node, ensure_ascii=False)
-    # legend form: reading (class): percent% (count entries)
+    # list form: reading (class): percent% (count entries)
     assert "じょう" in blob and "(On)" in blob
     assert "58%" in blob
     assert "2,904" in blob or "2904" in blob   # exact count shown beside percent
 
 
-def test_chart_node_absent_when_no_valid_totals():
-    assert bk.build_reading_chart_node(_syn([])) is None
+def test_distribution_node_absent_when_no_valid_totals():
+    assert bk.build_reading_distribution_node(_syn([])) is None
 
 
-def test_chart_omitted_for_fixture_with_only_invalid_totals():
+def test_distribution_omitted_for_fixture_with_only_invalid_totals():
     # 苔: every wordsByReading group has an invalid total (zero, negative,
     # string, float, boolean, missing) -> no valid positive integer total ->
     # omit the statistic entirely, never fabricate zeros or sample percentages.
@@ -169,10 +171,10 @@ def test_chart_omitted_for_fixture_with_only_invalid_totals():
     dist = bk.reading_distribution(r)
     assert dist["total"] == 0
     assert dist["segments"] == []
-    assert bk.build_reading_chart_node(r) is None
+    assert bk.build_reading_distribution_node(r) is None
 
 
-def test_chart_present_for_fixture_with_valid_totals():
+def test_distribution_present_for_fixture_with_valid_totals():
     # 測: そく=400 + はか=20 = 420 valid positive totals -> statistic present,
     # computed over the full totals rather than the 1-3 shown example words.
     r = rec("malformed/測.json")
@@ -180,4 +182,4 @@ def test_chart_present_for_fixture_with_valid_totals():
     assert dist["total"] == 420
     assert sum(s["count"] for s in dist["segments"]) == 420
     assert sum(s["percent"] for s in dist["segments"]) == 100
-    assert bk.build_reading_chart_node(r) is not None
+    assert bk.build_reading_distribution_node(r) is not None

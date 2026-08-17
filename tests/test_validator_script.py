@@ -25,20 +25,6 @@ def _banks():
     return bk.build_banks(recs, {"髙": "高"})
 
 
-def _chart_assets():
-    """The per-entry reading-distribution PNG charts every card references."""
-    recs = [
-        bk.normalize_record(json.loads((FIX / f"{c}.json").read_text(encoding="utf-8")))
-        for c in CHARS
-    ]
-    assets = {}
-    for r in recs:
-        png = bk.build_reading_distribution_png(r)
-        if png is not None:
-            assets[bk.reading_distribution_asset_name(r["character"])] = png
-    return assets
-
-
 def _fake_kvg(c, phon=None):
     pa = f' kvg:phon="{phon}"' if phon else ""
     return (f'<svg xmlns:kvg="x"><g kvg:element="{c}"{pa}>'
@@ -56,11 +42,6 @@ def _enriched():
     svgs["場"] = _fake_kvg("場", "\u661c")
     svgs["生"] = _fake_kvg("生", "\u661c")
     enr = bk.assemble_enrichment(svgs, ranks)
-    # bundle the per-entry reading-distribution PNG charts too (as run_build does)
-    for r in recs:
-        png = bk.build_reading_distribution_png(r)
-        if png is not None:
-            enr["assets"][bk.reading_distribution_asset_name(r["character"])] = png
     banks = bk.build_banks(recs, {"髙": "高"}, enrichment=enr)
     return banks, enr
 
@@ -80,7 +61,7 @@ def test_node_validator_accepts_built_zip(tmp_path):
     if not (ROOT / "node_modules" / "ajv").exists():
         pytest.skip("node_modules not installed")
     zip_path = tmp_path / bk.ZIP_NAME
-    zip_path.write_bytes(bk.build_zip(_banks(), "2026.08.16", assets=_chart_assets(), manifest=_manifest()))
+    zip_path.write_bytes(bk.build_zip(_banks(), "2026.08.16", manifest=_manifest()))
     proc = subprocess.run(
         ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
         capture_output=True, text=True,

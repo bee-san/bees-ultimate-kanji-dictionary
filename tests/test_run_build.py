@@ -70,9 +70,10 @@ def _walk_img_paths(node, out):
             _walk_img_paths(v, out)
 
 
-def test_run_build_bundles_reading_distribution_pngs_with_no_dangling_refs(tmp_path):
-    # Every reading-distribution chart the term cards reference must be packaged
-    # as a real PNG member -- a built ZIP must never carry a dangling img path.
+def test_run_build_ships_no_reading_distribution_media_and_no_dangling_refs(tmp_path):
+    # The reading distribution is textual now: the built ZIP must contain NO
+    # reading-distribution PNG members, and no term card may reference a packaged
+    # chart image path (so there is nothing to dangle).
     cache = tmp_path / "cache"
 
     result = bk.run_build(CHARS, str(cache), "2026-08-16", aliases={}, fetcher=_payload)
@@ -80,19 +81,20 @@ def test_run_build_bundles_reading_distribution_pngs_with_no_dangling_refs(tmp_p
     with zipfile.ZipFile(io.BytesIO(result["zip_bytes"])) as zf:
         names = set(zf.namelist())
         term_bank = json.loads(zf.read("term_bank_1.json"))
-        # each shipped PNG is a real 128x128 RGBA PNG
+        # no packaged reading-distribution media of any kind
         pngs = [n for n in names if n.startswith("reading-distribution/")]
-        assert pngs, "expected packaged reading-distribution PNGs"
-        for name in pngs:
-            data = zf.read(name)
-            assert data[:8] == b"\x89PNG\r\n\x1a\n"
+        assert not pngs, f"no reading-distribution media should ship, found {pngs}"
+        assert not [n for n in names if n.lower().endswith(".png")], \
+            "no PNG members at all should ship"
 
+    # term cards reference no chart image path (they carry the distribution as text)
     referenced = set()
     _walk_img_paths(term_bank, referenced)
     charts = {p for p in referenced if p.startswith("reading-distribution/")}
-    assert charts, "term cards must reference the packaged chart PNGs"
-    dangling = charts - names
-    assert not dangling, f"dangling chart references: {dangling}"
-    # both 場 and 生 have valid Jiten totals -> both get a chart
-    for c in CHARS:
-        assert bk.reading_distribution_asset_name(c) in names
+    assert not charts, f"term cards must not reference packaged chart media: {charts}"
+
+    # but the truthful distribution text IS present for both characters
+    tb_text = json.dumps(term_bank, ensure_ascii=False)
+    assert "Reading distribution" in tb_text
+    assert "reading-distribution" in tb_text  # the textual section role
+    assert "%" in tb_text

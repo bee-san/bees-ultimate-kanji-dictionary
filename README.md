@@ -18,14 +18,14 @@ renders a plainer card with just readings, meanings, and stroke data. A
 full visual acceptance inventory lives in
 [`docs/visual-qa/feature-inventory.md`](docs/visual-qa/feature-inventory.md).
 
-| Enriched entry (生) | Expanded learning aids (生) | Narrow / reduced-motion (場) |
+| Enriched entry (生) | Expanded learning aids (生) | Narrow / dark (場) |
 | :---: | :---: | :---: |
-| ![Real Yomitan search result for the kanji 生, showing the keyword "life", labelled On/Kun reading chips, meanings, a Rank/Grade/JLPT/stroke badge row, the coloured reading-share donut with its legend and entry counts, and common vocabulary grouped by reading with furigana.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry in real Yomitan with the Learning aids disclosure expanded, revealing the static KanjiVG stroke-order diagram (with numbered strokes) and the stroke-count text fallback.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 360px Yomitan popup, showing the reading-share donut, grouped vocabulary, and the static stroke diagram wrapping cleanly without clipping or animation.](docs/images/real-yomitan/ba-narrow-expanded.png) |
+| ![Real Yomitan search result for the kanji 生, showing the keyword "life", reading chips, meanings, a textual Reading distribution section listing each reading with its percentage and exact entry count, and six common words in a two-column grid.](docs/images/real-yomitan/sei-text-dist-compact-light.png) | ![The same 生 entry in real Yomitan with the collapsed disclosures expanded, revealing the complete readings, metadata, more vocabulary, and the static KanjiVG stroke-order diagram with numbered strokes.](docs/images/real-yomitan/sei-text-dist-expanded-light.png) | ![The 場 entry in a narrow dark-theme Yomitan popup, showing the textual Reading distribution list and the two-column vocabulary grid collapsing cleanly without any chart graphic.](docs/images/real-yomitan/ba-text-dist-narrow-dark.png) |
 
-The KANJIDIC2 fallback is deliberately plain — no invented donut, ranks, or
-examples:
+The KANJIDIC2 fallback is deliberately plain — no invented reading distribution,
+ranks, or examples:
 
-![Real Yomitan search result for the KANJIDIC2-only fallback kanji 㐆, showing only the keyword, English meanings, and the stroke count, with no reading-share donut and no example vocabulary.](docs/images/real-yomitan/kanjidic2-fallback-compact-light.png)
+![Real Yomitan search result for the KANJIDIC2-only fallback kanji 㐆, showing only the keyword, English meanings, and the stroke count, with no reading distribution and no example vocabulary.](docs/images/real-yomitan/kanjidic2-fallback-compact-light.png)
 
 ## Install
 
@@ -39,8 +39,9 @@ examples:
 - Jiten meanings, on/kun readings, frequency ranks, and common vocabulary
   examples grouped by reading (On / Kun / Other), chosen by Jiten rank and
   rendered with furigana.
-- A **reading distribution** donut using Jiten's complete per-reading entry
-  counts, with a visible legend and exact counts.
+- A **reading distribution** using Jiten's complete per-reading entry counts,
+  shown as a concise heading followed by a plain text list of reading labels and
+  percentages (with exact entry counts).
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
@@ -67,14 +68,14 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
 - **English only.** Glosses and meanings are English.
 - **Kanji-focused, not a full word dictionary.** Each character ships as a
   single structured **term** entry — that rich card (readings, meanings,
-  vocabulary, and the reading-share donut) is what you see when you scan/hover
+  vocabulary, and the reading distribution) is what you see when you scan/hover
   or search the character, the ordinary lookup path. It is not a general JMdict
   vocabulary dictionary.
 - **One canonical surface, no native kanji card.** The package deliberately
   ships no native `kanji_bank`. Yomitan's separate "view kanji" drilldown (the
   `type=kanji` link) routes only to Yomitan's built-in flat kanji renderer,
-  which dictionary CSS cannot style and which would hide the reading-share
-  donut. With no kanji dictionary shipped, that secondary drilldown simply
+  which dictionary CSS cannot style and which would hide the reading
+  distribution. With no kanji dictionary shipped, that secondary drilldown simply
   reports "no results"; the full rich card is always delivered through the
   ordinary term lookup instead.
 - **No audio and no pitch accent.**
@@ -82,7 +83,7 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
   fetched at most once daily; a release appears only when normalized content
   changes.
 - **KANJIDIC2 fallback entries are plain** (meanings, on/kun, stroke count,
-  grade/JLPT) with no examples, no frequency rank, and no reading-share donut.
+  grade/JLPT) with no examples, no frequency rank, and no reading distribution.
 - **Reading distribution** is omitted when Jiten has no per-reading counts.
 
 ## Build and test

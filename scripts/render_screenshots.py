@@ -8,7 +8,7 @@ as a compact Yomitan-style popup card. Emits three standalone HTML pages that
 the screenshot step captures:
 
   1. compact.html    -- a normal entry with Learning aids collapsed
-  2. expanded.html   -- the same entry with Learning aids open (donut, phonetic
+  2. expanded.html   -- the same entry with Learning aids open (phonetic
                         family, stroke-order diagram)
   3. narrow.html     -- a reduced-motion / narrow-viewport static-fallback view
 

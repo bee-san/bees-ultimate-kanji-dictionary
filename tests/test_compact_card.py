@@ -8,8 +8,8 @@ in this exact order:
      (``reading_entry_counts``), rendered as plain reading CHIPS -- NOT split
      into On/Kun labelled groups
   3. a compact MEANING line
-  4. the reading-distribution chart, rendered as ONE packaged raster PNG image
-     referenced through supported structured content (with alt text / legend)
+  4. the reading distribution, rendered as a concise heading followed by a
+     plain textual list of reading labels and percentages (no graphic/image)
   5. exactly SIX globally highest-frequency, de-duplicated vocabulary words in a
      responsive two-column grid (3 left / 3 right), each with ruby + concise gloss
   6. collapsed Yomitan disclosures (``details``) carrying every piece of
@@ -144,30 +144,35 @@ def test_meaning_line_present_and_distinct():
     assert "location" in _text(meaning)
 
 
-# --- 4. raster PNG chart ------------------------------------------------------
+# --- 4. textual reading distribution ------------------------------------------
 
-def test_distribution_is_single_packaged_png_image():
+def test_distribution_is_a_textual_list_no_image():
     for char in ("場", "生"):
         root = _detail_root(char)
-        donut = bk_find(root, "reading-donut")
-        assert donut is not None, f"{char}: distribution node missing"
-        imgs = [n for n in _walk(donut) if n.get("tag") == "img"]
-        assert len(imgs) == 1, f"{char}: expected exactly one img, got {len(imgs)}"
-        img = imgs[0]
-        path = str(img.get("path", ""))
-        assert path.lower().endswith(".png"), f"{char}: chart img is not a PNG: {path}"
-        cp = ord(char)
-        assert path == f"reading-distribution/{cp:05x}.png", f"{char}: bad path {path}"
-        # alt text / legend must carry the information without pixels
-        assert img.get("alt"), f"{char}: chart img missing alt text"
+        dist = bk_find(root, "reading-distribution")
+        assert dist is not None, f"{char}: distribution node missing"
+        # no img anywhere in the section
+        imgs = [n for n in _walk(dist) if n.get("tag") == "img"]
+        assert not imgs, f"{char}: distribution must not contain an image"
+        blob = json.dumps(dist, ensure_ascii=False)
+        assert ".png" not in blob.lower(), f"{char}: no PNG reference allowed"
+        assert "reading-distribution/" not in blob, f"{char}: no packaged asset path"
+        assert '"path"' not in blob, f"{char}: no media path key"
+        # it IS a text list with the heading and percentages
+        assert '"tag": "ul"' in blob
+        assert "Reading distribution" in blob
+        assert "%" in blob
 
 
-def test_no_conic_gradient_ring_nodes_remain():
+def test_no_conic_gradient_or_graphic_nodes_remain():
     for char in ("場", "生"):
         root = _detail_root(char)
         roles = [_role(n) for n in _walk(root)]
         assert "donut-ring" not in roles
         assert "donut-hole" not in roles
+        assert "donut-graphic" not in roles
+        assert "donut-swatch" not in roles
+        assert "reading-donut" not in roles
         # no inline conic-gradient anywhere
         blob = json.dumps(root, ensure_ascii=False)
         assert "conic-gradient" not in blob
