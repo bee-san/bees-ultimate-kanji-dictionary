@@ -794,8 +794,8 @@ _SVG_NS = "http://www.w3.org/2000/svg"
 _KVG_ELEMENT = re.compile(r'kvg:element="([^"]+)"')
 _KVG_PATH = re.compile(r'<path\b[^>]*\bd="([^"]+)"[^>]*>')
 _KVG_STROKE_NUMBER = re.compile(
-    r'<text transform="matrix\(1 0 0 1 ([0-9]+(?:\.[0-9]+)?) '
-    r'([0-9]+(?:\.[0-9]+)?)\)">([1-9][0-9]*)</text>'
+    r'<text transform="matrix\(1 0 0 1 (-?[0-9]+(?:\.[0-9]+)?) '
+    r'(-?[0-9]+(?:\.[0-9]+)?)\)">([1-9][0-9]*)</text>'
 )
 
 
@@ -843,12 +843,9 @@ def sanitize_kanjivg_svg(svg_text, character):
     Output is deterministic and safe for reduced-motion users.
     """
     paths = _KVG_PATH.findall(svg_text)
-    outlines = "".join(
+    strokes = "".join(
         f'<path class="bee-stroke-outline" fill="none" stroke="#ffffff" '
         f'stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="{d}"/>'
-        for d in paths
-    )
-    inks = "".join(
         f'<path class="bee-stroke-ink" fill="none" stroke="#0072b2" '
         f'stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="{d}"/>'
         for d in paths
@@ -865,7 +862,7 @@ def sanitize_kanjivg_svg(svg_text, character):
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109" '
         'width="109" height="109" role="img" '
         f'aria-label="{title}"><title>{title}</title>'
-        f"{outlines}{inks}{numbers}</svg>"
+        f"{strokes}{numbers}</svg>"
     )
 
 
@@ -1241,7 +1238,7 @@ LICENSE_DATA_TEXT = (
 
 # KanjiVG (stroke-order SVGs + phonetic-component markers) is Copyright (C)
 # Ulrich Apel, distributed under CC BY-SA 3.0. Bundled SVGs are adapted (stroke
-# geometry only, re-styled for animation); the share-alike obligation is met by
+# geometry and numbers, re-styled as static high-contrast diagrams); share-alike is met by
 # redistributing them under the same/compatible CC BY-SA licence.
 LICENSE_KANJIVG_TEXT = (
     "Stroke-order diagrams and phonetic-component (kvg:phon) relationships are\n"
@@ -1249,7 +1246,7 @@ LICENSE_KANJIVG_TEXT = (
     "KanjiVG is distributed under the Creative Commons Attribution-Share Alike\n"
     "3.0 licence; see https://creativecommons.org/licenses/by-sa/3.0/ and\n"
     "https://kanjivg.tagaini.net/. The bundled SVGs are adaptations (stroke\n"
-    "geometry extracted and re-styled for lightweight stroke-order animation);\n"
+    "geometry and numbers extracted and re-styled as static high-contrast diagrams);\n"
     "they are redistributed under the same CC BY-SA licence (share-alike).\n"
 )
 

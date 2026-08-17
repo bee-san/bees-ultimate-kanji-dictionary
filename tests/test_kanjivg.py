@@ -73,9 +73,13 @@ def test_sanitize_uses_a_static_diagram_safe_for_reduced_motion_and_canvas_snaps
 
 
 def test_sanitized_strokes_have_a_static_base_for_yomitan_canvas_snapshots():
-    out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
+    out = bk.sanitize_kanjivg_svg(SEI_SVG, "生")
     assert out.count('class="bee-stroke-outline"') == 5
     assert out.count('class="bee-stroke-ink"') == 5
+    first_outline = out.index('class="bee-stroke-outline"')
+    first_ink = out.index('class="bee-stroke-ink"')
+    second_outline = out.index('class="bee-stroke-outline"', first_outline + 1)
+    assert first_outline < first_ink < second_outline
 
 
 def test_sanitized_static_diagram_retains_safe_stroke_order_numbers():
@@ -83,6 +87,15 @@ def test_sanitized_static_diagram_retains_safe_stroke_order_numbers():
     assert out.count('class="bee-stroke-number"') == 2
     assert '<text class="bee-stroke-number" x="20.00" y="20.00"' in out
     assert 'paint-order="stroke"' in out
+
+
+def test_sanitized_static_diagram_retains_safe_negative_label_coordinates():
+    source = SEI_SVG.replace(
+        'matrix(1 0 0 1 20.00 20.00)',
+        'matrix(1 0 0 1 -2.56 20.00)',
+    )
+    out = bk.sanitize_kanjivg_svg(source, "生")
+    assert '<text class="bee-stroke-number" x="-2.56" y="20.00"' in out
 
 
 def test_sanitized_strokes_remain_legible_in_dark_embedded_images():

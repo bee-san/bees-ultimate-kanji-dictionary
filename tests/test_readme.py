@@ -69,3 +69,11 @@ def test_stroke_diagram_is_documented_as_static():
     low = README.lower()
     assert "static kanjivg stroke-order diagram" in low
     assert "animated kanjivg" not in low
+
+
+def test_bundled_kanjivg_licence_describes_static_adaptation():
+    import bees_kanji as bk
+
+    low = bk.LICENSE_KANJIVG_TEXT.lower()
+    assert "static" in low
+    assert "animation" not in low
