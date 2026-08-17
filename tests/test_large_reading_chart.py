@@ -106,23 +106,54 @@ def test_preserved_container_is_prominent_on_ordinary_popups():
 
 def test_narrow_popup_has_a_sensible_chart_cap():
     # On a narrow popup the chart must be capped so it never overflows the pane,
-    # while staying meaningfully large.
+    # while staying meaningfully large. The cap lives in a max-width media query
+    # (placed after the base rule so it wins the cascade -- see
+    # test_narrow_chart_cap_actually_wins_the_cascade).
     assert "@media (max-width:" in CSS
-    idx = CSS.index("@media (max-width:")
-    narrow = CSS[idx:]
-    assert '[data-sc-bee-role="donut-graphic"]' in narrow, (
-        "narrow-popup media query must cap the chart graphic"
-    )
-    # somewhere under the narrow query the chart container is capped by max-width
-    block_start = narrow.index('[data-sc-bee-role="donut-graphic"]')
-    narrow_block = narrow[block_start: block_start + 400]
-    caps = _lengths(narrow_block, "max-width")
-    assert caps, "narrow-popup chart must set a max-width cap"
-    val, unit = caps[0]
+    sel = '[data-sc-bee-role="donut-graphic"] .gloss-image-container'
+    # locate a media-query occurrence of the chart container (inside @media).
+    capped = None
+    for m in re.finditer(re.escape(sel), CSS):
+        block = CSS[m.start(): CSS.index("}", m.start()) + 1]
+        if CSS.rfind("@media", 0, m.start()) > CSS.rfind("\n}\n", 0, m.start()):
+            caps = _lengths(block, "max-width")
+            if caps:
+                capped = caps[0]
+                break
+    assert capped, "narrow-popup chart must set a max-width cap inside a media query"
+    val, unit = capped
     if unit == "%":
         assert val <= 100.0
     else:
         assert 6.0 <= val <= 16.0, f"narrow cap out of sensible range: {val}{unit}"
+
+
+def test_narrow_chart_cap_actually_wins_the_cascade():
+    # The narrow-popup cap must not be dead CSS. At equal specificity the LAST
+    # matching rule wins, so the media-query override of the chart container must
+    # appear AFTER the base `.gloss-image-container { width: 14rem }` rule --
+    # otherwise the base rule's `max-width: 100%` overrides the narrow cap and it
+    # never applies (verified in real Yomitan: container stayed 14rem at 320px).
+    sel = '[data-sc-bee-role="donut-graphic"] .gloss-image-container'
+    base_idx = re.search(r"(?m)^" + re.escape(sel) + r"\b", CSS)
+    assert base_idx, "base chart-container rule must exist at top level"
+    base_pos = base_idx.start()
+    # find a narrow media-query occurrence of the same selector AFTER the base
+    narrow_after = None
+    for m in re.finditer(re.escape(sel), CSS):
+        if m.start() > base_pos:
+            narrow_after = m.start()
+            break
+    assert narrow_after is not None, (
+        "a narrow-popup override of the chart container must come AFTER the base "
+        "rule so its max-width cap wins the cascade"
+    )
+    # and that later occurrence must live inside a max-width media query
+    preceding = CSS[:narrow_after]
+    last_media = preceding.rfind("@media")
+    assert last_media != -1 and "max-width" in CSS[last_media:narrow_after], (
+        "the winning chart-container override must be inside a max-width media query"
+    )
 
 
 def test_chart_is_no_longer_the_old_tiny_thumbnail():

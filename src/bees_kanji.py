@@ -1632,7 +1632,6 @@ STYLES_CSS = """\
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
   [data-sc-bee-role="donut-graphic"] { display: block; margin: 0 auto 0.4em; }
-  [data-sc-bee-role="donut-graphic"] .gloss-image-container { width: 100%; max-width: 11rem; }
   [data-sc-bee-role="donut-legend"] { display: block; }
 }
 
@@ -1690,6 +1689,19 @@ STYLES_CSS = """\
   margin-right: 0.4em;
   overflow: hidden;
   vertical-align: middle;
+}
+
+/* Narrow-popup chart cap. This MUST come after the base
+   `.gloss-image-container { width: 14rem; max-width: 100% }` rule above:
+   at equal specificity the last matching rule wins, so placing the cap here
+   (not only in the earlier layout media query) is what actually shrinks the
+   chart on a compact pane. Verified in real Yomitan: without this ordering the
+   base max-width:100% overrode the cap and the chart stayed 14rem at 320px. */
+@media (max-width: 24em) {
+  [data-sc-bee-role="donut-graphic"] .gloss-image-container {
+    width: 100%;
+    max-width: 11rem;
+  }
 }
 
 /* Phonetic family line: quiet, wraps gracefully. */
