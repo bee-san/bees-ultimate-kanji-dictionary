@@ -39,12 +39,8 @@ examples:
 - Jiten meanings, on/kun readings, frequency ranks, and common vocabulary
   examples grouped by reading (On / Kun / Other), chosen by Jiten rank and
   rendered with furigana.
-- A truthful **share of Jiten vocabulary entries by reading** donut, computed
-  from the complete per-reading vocabulary-entry counts (not the shown
-  examples), with a visible legend, exact entry counts, and a non-colour
-  fallback. It counts distinct Jiten vocabulary form/reading links, **not**
-  occurrences in text — the percentages are not usage frequency or the
-  probability of a reading.
+- A **reading distribution** donut using Jiten's complete per-reading entry
+  counts, with a visible legend and exact counts.
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
@@ -87,10 +83,7 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
   changes.
 - **KANJIDIC2 fallback entries are plain** (meanings, on/kun, stroke count,
   grade/JLPT) with no examples, no frequency rank, and no reading-share donut.
-- **The reading-share donut is a share of Jiten vocabulary entries by reading.**
-  It counts distinct Jiten vocabulary form/reading links, not occurrences in
-  text; percentages are not usage frequency or the probability of a reading. It
-  is omitted entirely when Jiten supplies no valid per-reading counts.
+- **Reading distribution** is omitted when Jiten has no per-reading counts.
 
 ## Build and test
 

@@ -73,12 +73,11 @@ def test_required_licence_and_attribution_notices_present():
     assert "LICENSE-kanjivg.txt" in README
 
 
-def test_reading_share_semantics_stated_truthfully():
-    # The verified Jiten-backed semantics: a share of vocabulary *entries* by
-    # reading, explicitly NOT usage/occurrence frequency.
+def test_reading_distribution_is_documented_concisely():
     low = README.lower()
-    assert "jiten vocabulary entries by reading" in low
-    assert "not" in low and ("occurrence" in low or "usage frequency" in low)
+    assert "reading distribution" in low
+    assert "counts distinct" not in low
+    assert "usage frequency" not in low
 
 
 def test_stroke_diagram_is_documented_as_static():

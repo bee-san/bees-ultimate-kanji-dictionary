@@ -137,7 +137,7 @@ def test_donut_still_present_with_truthful_source_and_data():
     assert _find(detail, "reading-donut") is not None
     blob = _text(detail)
     assert bk.DONUT_TITLE in blob
-    assert bk.DONUT_DISCLAIMER in blob
+    assert "Counts distinct Jiten vocabulary" not in blob
     assert bk.reading_distribution(rec("生.json"))["total"] == 3922
 
 

@@ -587,14 +587,7 @@ def _conic_gradient(segments):
     return "conic-gradient(" + ", ".join(stops) + ")"
 
 
-# Exact, contract-frozen truthful labelling. This statistic is a share of Jiten
-# VOCABULARY ENTRIES (form/reading links) by reading -- NOT corpus usage, token
-# frequency, pronunciation probability, or authoritative real-world frequency.
-DONUT_TITLE = "Share of Jiten vocabulary entries by reading"
-DONUT_DISCLAIMER = (
-    "Counts distinct Jiten vocabulary form/reading links, not occurrences in "
-    "text. Percentages are not usage frequency or the probability of a reading."
-)
+DONUT_TITLE = "Reading distribution"
 
 
 def _segment_label(segment):
@@ -607,17 +600,7 @@ def _segment_label(segment):
 
 
 def build_donut_node(record):
-    """Build an accessible reading-share donut structured-content node.
-
-    The donut ring is a CSS conic-gradient (deterministic, no per-entry asset)
-    with a hole punched by a centred disc. A visible semantic list, container
-    title, and explicit non-occurrence disclaimer describe it to assistive tech.
-    The legend lists every segment with its actual reading, On/Kun/Other class,
-    truthful percentage, and EXACT entry count so nothing depends on colour,
-    SVG, or CSS alone -- and a nonzero tiny group rendered as 0%% still shows its
-    count. Returns None when the entry has no valid Jiten group total (the
-    statistic is omitted rather than faked from examples).
-    """
+    """Build the reading distribution donut and legend."""
     dist = reading_distribution(record)
     if dist["total"] == 0:
         return None
@@ -667,17 +650,10 @@ def build_donut_node(record):
         "content": legend_items,
     }
 
-    # A visible caption states exactly what the statistic is, and a disclaimer
-    # rules out any misreading as usage frequency / pronunciation probability.
     caption = {
         "tag": "div",
         "data": {"beeRole": "donut-caption"},
         "content": DONUT_TITLE,
-    }
-    disclaimer = {
-        "tag": "div",
-        "data": {"beeRole": "donut-disclaimer"},
-        "content": DONUT_DISCLAIMER,
     }
 
     return {
@@ -690,7 +666,6 @@ def build_donut_node(record):
             {"tag": "div", "data": {"beeRole": "donut-graphic"},
              "content": [ring]},
             legend,
-            disclaimer,
         ],
     }
 
@@ -1434,11 +1409,6 @@ STYLES_CSS = """\
   margin-right: 0.4em;
   overflow: hidden;
   vertical-align: middle;
-}
-[data-sc-bee-role="donut-disclaimer"] {
-  font-size: 0.8em;
-  opacity: 0.7;
-  margin: 0.3em 0 0;
 }
 
 /* Phonetic family line: quiet, wraps gracefully. */

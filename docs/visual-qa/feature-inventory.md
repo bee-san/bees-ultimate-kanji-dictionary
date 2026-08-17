@@ -45,7 +45,7 @@ screenshot given.
 | 3 | On/Kun readings as labelled chips | 生 (ON: セイ/ショウ…, KUN: い.きる…) | Real "On"/"Kun" text labels + separated chips; distinction not colour-dependent | **PASS** | `sei-compact-light.png` |
 | 4 | Meanings line | 懐 → "feelings; heart; yearn; miss someone; …" | Compact distinct meaning line, no raw JSON | **PASS** | `kai-expanded-long-entry.png` |
 | 5 | Rank / Grade / JLPT / stroke badges | 生 → Rank 19, Grade 1, JLPT N4, 5 strokes | Small aligned badge row; only known values shown | **PASS** | `sei-compact-light.png` |
-| 6 | **Reading-share donut** (share of Jiten vocabulary entries by reading) | 生, 場, 語, 来, 懐, 薔 | Real multi-colour conic-gradient ring (≈45×45) with legend, percentages, exact entry counts, and the "counts distinct links, not occurrences… not usage frequency" disclaimer | **PASS** | `sei-expanded-light.png`, `ba-narrow-expanded.png` |
+| 6 | **Reading distribution donut** | 生, 場, 語, 来, 懐, 薔 | Multi-colour ring with a concise title, legend, percentages, and exact entry counts | **PASS** | `sei-expanded-light.png`, `ba-narrow-expanded.png` |
 | 7 | Precisely labelled reading counts + percentages | 場 → じょう(On) 58% (2,904); ば(Kun) 42% (2,083); えき(Other) 0% (1) | Per-reading label(class): % (N entries) | **PASS** | `ba-expanded-light.png` |
 | 8 | Ruby vocabulary grouped by reading (On/Kun/Other) | 語 → Kun / Other / On groups w/ furigana | Grouped example words with `<ruby>` furigana + glosses | **PASS** | `go-expanded-phonetic-family.png` |
 | 9 | Phonetic-family + provenance (KanjiVG source label) | 語 → "Phonetic 音 吾: 悟 — KanjiVG", "Source: KanjiVG (kvg:phon)" | Family members + explicit KanjiVG source label | **PASS** | `go-expanded-phonetic-family.png` |
@@ -63,11 +63,7 @@ screenshot given.
 
 ## Truthfulness / scope checks
 
-- **Reading percentages** use the parent-verified **Jiten vocabulary-entry
-  distribution** semantics ("share of Jiten vocabulary entries by reading"),
-  with the explicit disclaimer that counts are distinct form/reading links,
-  **not** occurrences in text and **not** usage frequency/probability. Verified
-  against on-card legend text (e.g. 生: せい 46% / 1,817 entries).
+- **Reading percentages** use Jiten's complete per-reading entry counts.
 - **No Anki / Lapis** material anywhere in the shipped package or README.
 - **No fabricated frequency / probability claims.** Ranks come from Jiten;
   KANJIDIC2 fallback entries carry no rank, no examples, no donut.

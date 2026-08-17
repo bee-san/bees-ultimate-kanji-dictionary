@@ -46,9 +46,8 @@ def test_term_detail_uses_full_jiten_reading_share_denominator():
     # every visible legend line matches the honest full-payload count + percent
     for seg in dist["segments"]:
         assert f"{seg['percent']}% ({seg['count']:,} entries)" in blob
-    # the truthful title and non-occurrence disclaimer are present
-    assert "Share of Jiten vocabulary entries by reading" in blob
-    assert bk.DONUT_DISCLAIMER in blob
+    assert "Reading distribution" in blob
+    assert "Counts distinct Jiten vocabulary" not in blob
 
 
 def test_kanji_bank_entry_shape_for_ba():

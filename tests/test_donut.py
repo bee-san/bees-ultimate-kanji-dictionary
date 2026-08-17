@@ -119,18 +119,16 @@ def test_duplicate_labels_aggregate_deterministically():
     assert by_reading == {"じょう": 105, "ば": 20}
 
 
-def test_donut_node_has_truthful_title_disclaimer_and_legend():
+def test_donut_node_has_concise_title_and_legend():
     r = rec("生.json")
     node = bk.build_donut_node(r)
     blob = json.dumps(node, ensure_ascii=False)
-    # exact truthful visible title -- a share of Jiten vocabulary ENTRIES
-    assert "Share of Jiten vocabulary entries by reading" in blob
-    # explicit non-occurrence disclaimer as visible text
-    assert "Counts distinct Jiten vocabulary form/reading links, not occurrences in text." in blob
-    assert "not usage frequency" in blob
-    # Forbidden misleading wording never appears OUTSIDE the disclaimer's own
-    # truthful negations ("not usage frequency or the probability of a reading").
-    scan = blob.replace(bk.DONUT_DISCLAIMER, "").lower()
+    assert "Reading distribution" in blob
+    assert "Counts distinct Jiten vocabulary" not in blob
+    assert "not usage frequency" not in blob
+    assert "donut-disclaimer" not in blob
+    # Misleading wording never appears.
+    scan = blob.lower()
     for banned in ("usage frequency", "token frequency", "corpus", "probability",
                    "most used", "pronunciation", "real-world frequency", "chance"):
         assert banned not in scan, banned

@@ -45,8 +45,8 @@ def test_term_entry_embeds_donut_when_reading_counts_present():
     # computed over the complete group totals (denominator 3922), NOT examples
     assert "reading-donut" in blob
     assert "%" in blob
-    assert "Share of Jiten vocabulary entries by reading" in blob
-    assert bk.DONUT_DISCLAIMER in blob
+    assert "Reading distribution" in blob
+    assert "Counts distinct Jiten vocabulary" not in blob
     assert bk.reading_distribution(r)["total"] == 3922
 
 
