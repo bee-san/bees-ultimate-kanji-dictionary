@@ -119,9 +119,9 @@ def test_duplicate_labels_aggregate_deterministically():
     assert by_reading == {"じょう": 105, "ば": 20}
 
 
-def test_donut_node_has_concise_title_and_legend():
+def test_chart_node_has_concise_title_and_legend():
     r = rec("生.json")
-    node = bk.build_donut_node(r)
+    node = bk.build_reading_chart_node(r)
     blob = json.dumps(node, ensure_ascii=False)
     assert "Reading distribution" in blob
     assert "Counts distinct Jiten vocabulary" not in blob
@@ -141,11 +141,14 @@ def test_donut_node_has_concise_title_and_legend():
             assert seg["reading"] in blob
     assert '"tag": "ul"' in blob
     assert "ariaLabel" not in blob and "ariaHidden" not in blob
+    # the graphic is a packaged raster PNG referenced by archive path (not conic)
+    assert "conic-gradient" not in blob
+    assert bk.reading_distribution_asset_name("生") in blob
 
 
-def test_donut_legend_shows_reading_class_percent_and_count():
+def test_chart_legend_shows_reading_class_percent_and_count():
     r = rec("場.json")
-    node = bk.build_donut_node(r)
+    node = bk.build_reading_chart_node(r)
     blob = json.dumps(node, ensure_ascii=False)
     # legend form: reading (class): percent% (count entries)
     assert "じょう" in blob and "(On)" in blob
@@ -153,11 +156,11 @@ def test_donut_legend_shows_reading_class_percent_and_count():
     assert "2,904" in blob or "2904" in blob   # exact count shown beside percent
 
 
-def test_donut_node_absent_when_no_valid_totals():
-    assert bk.build_donut_node(_syn([])) is None
+def test_chart_node_absent_when_no_valid_totals():
+    assert bk.build_reading_chart_node(_syn([])) is None
 
 
-def test_donut_omitted_for_fixture_with_only_invalid_totals():
+def test_chart_omitted_for_fixture_with_only_invalid_totals():
     # 苔: every wordsByReading group has an invalid total (zero, negative,
     # string, float, boolean, missing) -> no valid positive integer total ->
     # omit the statistic entirely, never fabricate zeros or sample percentages.
@@ -166,10 +169,10 @@ def test_donut_omitted_for_fixture_with_only_invalid_totals():
     dist = bk.reading_distribution(r)
     assert dist["total"] == 0
     assert dist["segments"] == []
-    assert bk.build_donut_node(r) is None
+    assert bk.build_reading_chart_node(r) is None
 
 
-def test_donut_present_for_fixture_with_valid_totals():
+def test_chart_present_for_fixture_with_valid_totals():
     # 測: そく=400 + はか=20 = 420 valid positive totals -> statistic present,
     # computed over the full totals rather than the 1-3 shown example words.
     r = rec("malformed/測.json")
@@ -177,4 +180,4 @@ def test_donut_present_for_fixture_with_valid_totals():
     assert dist["total"] == 420
     assert sum(s["count"] for s in dist["segments"]) == 420
     assert sum(s["percent"] for s in dist["segments"]) == 100
-    assert bk.build_donut_node(r) is not None
+    assert bk.build_reading_chart_node(r) is not None

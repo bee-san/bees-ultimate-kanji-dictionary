@@ -269,6 +269,47 @@ def _select_examples(payload, on, kun):
     return result
 
 
+def _select_global_words(payload, limit=6):
+    """Pick the globally highest-frequency, de-duplicated example words.
+
+    Draws candidates from ``topWords`` and every ``wordsByReading`` group,
+    cleans them, de-duplicates by (word_id, reading_index) keeping the lowest
+    (best) frequency rank, and returns the ``limit`` best by Jiten frequency
+    rank. Deterministic ties/fallbacks: within an equal rank the order is
+    (rank, word_id, reading_index, surface, gloss). This is a GLOBAL selection
+    across all readings -- NOT the per-reading example groups -- so the compact
+    card can surface the single most useful vocabulary regardless of reading.
+    """
+    candidates = []
+    sources = [payload.get("topWords") or []]
+    sources.extend(
+        (group.get("words") or [])
+        for group in payload.get("wordsByReading") or []
+        if isinstance(group, dict)
+    )
+    for source in sources:
+        for item in source:
+            clean = _clean_example(item)
+            if clean is not None:
+                candidates.append(clean)
+
+    best = {}
+    for item in candidates:
+        key = (item["word_id"], item["reading_index"])
+        prior = best.get(key)
+        order = (item["rank"], item["surface"], item["gloss"])
+        if prior is None or order < (prior["rank"], prior["surface"], prior["gloss"]):
+            best[key] = item
+
+    return sorted(
+        best.values(),
+        key=lambda item: (
+            item["rank"], item["word_id"], item["reading_index"],
+            item["surface"], item["gloss"],
+        ),
+    )[:limit]
+
+
 def _reading_entry_counts(payload, on, kun):
     """Extract the complete Jiten vocabulary-entry counts per reading group.
 
@@ -349,6 +390,7 @@ def normalize_record(payload):
         "grade": _int_or_none(payload.get("grade")),
         "jlpt": _int_or_none(payload.get("jlptLevel")),
         "examples": _select_examples(payload, on, kun),
+        "global_words": _select_global_words(payload),
         "reading_entry_counts": _reading_entry_counts(payload, on, kun),
     }
 
@@ -460,6 +502,7 @@ def kanjidic2_record(character, fields):
         "grade": fields.get("grade"),
         "jlpt": fields.get("jlpt"),
         "examples": [],            # never invent example words
+        "global_words": [],        # KANJIDIC2 supplies no example vocabulary
         "reading_entry_counts": [],  # never fabricate a reading-share statistic
     }
 
@@ -576,17 +619,6 @@ def reading_distribution(record):
     return {"total": total, "segments": segments, "collapsed": collapsed}
 
 
-def _conic_gradient(segments):
-    """Build a deterministic CSS conic-gradient value from ordered segments."""
-    stops = []
-    acc = 0
-    for seg in segments:
-        start = acc
-        acc += seg["percent"]
-        stops.append(f"{seg['color']} {start}% {acc}%")
-    return "conic-gradient(" + ", ".join(stops) + ")"
-
-
 DONUT_TITLE = "Reading distribution"
 
 
@@ -599,40 +631,135 @@ def _segment_label(segment):
     return f"{reading} ({cls})"
 
 
-def build_donut_node(record):
-    """Build the reading distribution donut and legend."""
+# --- Per-entry raster reading-distribution chart (packaged PNG media) ---------
+
+# The compact card ships the reading distribution as a deterministic per-entry
+# PNG packaged as Yomitan dictionary media (referenced through a supported
+# structured-content <img>), rather than an inline CSS conic-gradient ring.
+# A raster image is what official Yomitan renders from an archive `path`, so it
+# survives every renderer / theme without relying on inline gradient support.
+
+# Fixed square canvas. 128px keeps the packaged bytes tiny while staying crisp
+# when the popup scales the image down to a few em.
+READING_CHART_SIZE = 128
+
+
+def _hex_to_rgba(hex_color, alpha=255):
+    """Convert a #rrggbb string to an (r, g, b, a) tuple."""
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+def reading_distribution_asset_name(character):
+    """Archive path for a character's packaged reading-distribution PNG.
+
+    Zero-padded lowercase hex code point under ``reading-distribution/`` so the
+    path is deterministic, collision-free, and independent of the glyph itself
+    (which may be filesystem-hostile).
+    """
+    return f"reading-distribution/{ord(character):05x}.png"
+
+
+def build_reading_distribution_png(record):
+    """Render the reading-distribution donut for a record as PNG bytes.
+
+    Deterministic: the same record always yields byte-identical output. Uses the
+    same truthful segment data as :func:`reading_distribution` (share of Jiten
+    vocabulary entries by reading), drawn as an anti-aliased donut ring on a
+    128x128 transparent RGBA canvas. Returns ``None`` when the record has no
+    valid positive Jiten reading total (e.g. KANJIDIC2-only records), so the
+    caller omits the chart rather than fabricating one.
+    """
+    from PIL import Image, ImageDraw
+
+    dist = reading_distribution(record)
+    if dist["total"] <= 0 or not dist["segments"]:
+        return None
+
+    # Supersample for smooth arc edges, then downsample to the target size.
+    scale = 4
+    size = READING_CHART_SIZE * scale
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    pad = int(size * 0.06)
+    box = [pad, pad, size - pad, size - pad]
+
+    # Draw wedges by cumulative percent. Start at -90 deg (12 o'clock) and go
+    # clockwise so the largest (first) segment leads from the top.
+    start = -90.0
+    for seg in dist["segments"]:
+        sweep = seg["percent"] * 3.6  # percent -> degrees
+        end = start + sweep
+        # A zero-percent (but nonzero-count) tail contributes no wedge; skip it
+        # so we never emit a degenerate arc.
+        if sweep > 0:
+            draw.pieslice(box, start, end, fill=_hex_to_rgba(seg["color"]))
+        start = end
+
+    # Punch a centred transparent hole to make it a donut (ring), not a pie.
+    hole = int(size * 0.30)
+    cx = cy = size // 2
+    draw.ellipse([cx - hole, cy - hole, cx + hole, cy + hole], fill=(0, 0, 0, 0))
+
+    img = img.resize((READING_CHART_SIZE, READING_CHART_SIZE), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    # Fixed PNG encoder options + no timestamp chunk => byte-deterministic.
+    img.save(buf, format="PNG", optimize=False, compress_level=9)
+    return buf.getvalue()
+
+
+def reading_chart_alt_text(record):
+    """Concise text equivalent of the reading-distribution chart (alt text)."""
+    dist = reading_distribution(record)
+    if dist["total"] <= 0:
+        return ""
+    parts = [
+        f"{_segment_label(s)} {s['percent']} percent"
+        for s in dist["segments"]
+    ]
+    return DONUT_TITLE + ": " + ", ".join(parts)
+
+
+def build_reading_chart_node(record):
+    """Build the packaged-PNG reading-distribution chart structured content.
+
+    The graphic is a single supported ``img`` referencing the packaged PNG by
+    its archive path; a caption and a visible text legend (colour swatch +
+    reading (class) + percent + exact entry count) carry the same data as real
+    text, so colour is never the sole channel and the chart degrades gracefully
+    when the image cannot load.
+    """
     dist = reading_distribution(record)
     if dist["total"] == 0:
         return None
     segments = dist["segments"]
+    alt = reading_chart_alt_text(record)
 
-    aria = DONUT_TITLE + ": " + ", ".join(
-        f"{_segment_label(s)} {s['percent']} percent ({s['count']} entries)"
-        for s in segments
-    )
-
-    # Donut ring: a coloured conic-gradient disc with a centred hole. The
-    # conic-gradient BACKGROUND is data-driven (per entry) so it must be inline;
-    # all sizing/shape lives in the bundled styles.css keyed on data-sc-bee-role.
-    ring = {
+    caption = {
         "tag": "div",
-        "data": {"beeRole": "donut-ring"},
-        "style": {"background": _conic_gradient(segments)},
-        "content": {
-            "tag": "div",
-            "data": {"beeRole": "donut-hole"},
-            "content": "",
-        },
+        "data": {"beeRole": "donut-caption"},
+        "content": DONUT_TITLE,
     }
 
-    # Visible text legend: colour swatch + reading (class) + percent + exact
-    # entry count. Counts use a thousands separator for readability.
+    image = {
+        "tag": "img",
+        "data": {"beeRole": "reading-chart"},
+        "path": reading_distribution_asset_name(record["character"]),
+        "width": 4.6,
+        "height": 4.6,
+        "sizeUnits": "em",
+        "alt": alt,
+        "title": alt,
+        "background": False,
+    }
+
     legend_items = []
     for s in segments:
         swatch = {
             "tag": "span",
             "data": {"beeRole": "donut-swatch"},
-            # colour is data-driven; the glyph keeps the swatch visible with no CSS
             "style": {"background": s["color"], "color": s["color"]},
             "content": "\u25a0",  # filled square, visible even without CSS colour
         }
@@ -643,28 +770,21 @@ def build_donut_node(record):
                 f"{_segment_label(s)}: {s['percent']}% ({s['count']:,} entries)",
             ],
         })
-
     legend = {
         "tag": "ul",
         "data": {"beeRole": "donut-legend"},
         "content": legend_items,
     }
 
-    caption = {
-        "tag": "div",
-        "data": {"beeRole": "donut-caption"},
-        "content": DONUT_TITLE,
-    }
-
     return {
         "tag": "div",
         "data": {"beeRole": "reading-donut"},
         "lang": "en",
-        "title": aria,
+        "title": alt,
         "content": [
             caption,
             {"tag": "div", "data": {"beeRole": "donut-graphic"},
-             "content": [ring]},
+             "content": [image]},
             legend,
         ],
     }
@@ -937,44 +1057,71 @@ def _badge_node(text):
     return {"tag": "span", "data": {"beeRole": "badge"}, "content": text}
 
 
-def _detail_content(record, enrichment=None):
-    """Build the structured-content body for a term entry's detail item.
+# Number of top readings shown above the fold, selected by Jiten totals.
+COMPACT_READING_COUNT = 3
+# Exactly this many globally highest-frequency words fill the compact grid.
+COMPACT_WORD_COUNT = 6
 
-    The card is a coherent, scannable layout rather than a wall of text:
 
-      * a HERO header pairing the kanji glyph with its keyword,
-      * On / Kun readings as separated, labelled chips grouped by class,
-      * a compact meaning line,
-      * a small aligned row of rank / grade / JLPT / stroke badges,
-      * the accessible reading-distribution donut (share of Jiten vocabulary
-        entries by reading -- omitted, never faked, for KANJIDIC2-only records),
-      * common vocabulary grouped by reading with ruby + glosses,
-      * and, when ``enrichment`` supplies them, a keyboard-accessible
-        progressive-disclosure "Learning aids" section carrying the phonetic
-        family and stroke-order diagram.
+def _top_reading_chip_row(record):
+    """Top readings (by Jiten vocabulary-entry totals) as plain chips.
 
-    Every graphic has a real text equivalent (reading labels, badge text, donut
-    legend), so colour or CSS is never the only carrier of information. Without
-    enrichment the learning-aids section is omitted entirely (never an empty,
-    misleading disclosure).
+    Selects the ``COMPACT_READING_COUNT`` readings with the highest Jiten
+    vocabulary-entry totals from ``reading_entry_counts`` (already ordered
+    desc count, reading, source) and renders each as a plain chip. This is a
+    single mixed row -- NOT split into On/Kun labelled groups -- because the
+    compact card ranks readings by how much vocabulary actually uses them, not
+    by reading class. Returns None when the record carries no reading totals.
     """
-    char = record["character"]
-    keyword = record["keyword"] or char
-    body = []
-
-    # Hero header: the glyph paired with its keyword. The glyph is a large,
-    # unambiguous anchor; the keyword names the character in one word.
-    body.append({
+    counts = record.get("reading_entry_counts") or []
+    top = [c["reading"] for c in counts[:COMPACT_READING_COUNT] if c.get("reading")]
+    if not top:
+        return None
+    chips = [
+        {"tag": "span", "data": {"beeRole": "reading-chip"}, "lang": "ja",
+         "content": reading}
+        for reading in top
+    ]
+    return {
         "tag": "div",
-        "data": {"beeRole": "hero"},
-        "content": [
-            {"tag": "span", "data": {"beeRole": "hero-glyph"},
-             "lang": "ja", "content": char},
-            {"tag": "span", "data": {"beeRole": "hero-keyword"}, "content": keyword},
-        ],
-    })
+        "data": {"beeRole": "reading-chips"},
+        "content": chips,
+    }
 
-    # Readings: On and Kun as separated, labelled chip groups (not a run-on line).
+
+def _global_vocab_grid(record):
+    """Exactly the six globally highest-frequency words in a responsive grid.
+
+    Uses ``record['global_words']`` (top six de-duplicated words by Jiten
+    frequency rank across all readings). Each cell carries the ruby surface plus
+    a concise gloss. The grid renders 3-left / 3-right on ordinary popups and a
+    single column on narrow popups (see styles.css). Returns None when the
+    record has no global words (KANJIDIC2-only entries).
+    """
+    words = record.get("global_words") or []
+    if not words:
+        return None
+    cells = []
+    for ex in words:
+        cells.append({
+            "tag": "div",
+            "data": {"beeRole": "vocab-item"},
+            "content": [
+                {"tag": "span", "data": {"beeRole": "vocab-word"},
+                 "lang": "ja", "content": _ruby_node(ex["ruby"])},
+                {"tag": "span", "data": {"beeRole": "vocab-gloss"},
+                 "content": " \u2014 " + ex["gloss"]},
+            ],
+        })
+    return {
+        "tag": "div",
+        "data": {"beeRole": "vocab-grid"},
+        "content": cells,
+    }
+
+
+def _reading_disclosure(record):
+    """Collapsed On/Kun reading disclosure (full lists, class-labelled)."""
     reading_groups = []
     on_group = _reading_group_node("On", record["on"])
     if on_group is not None:
@@ -982,22 +1129,20 @@ def _detail_content(record, enrichment=None):
     kun_group = _reading_group_node("Kun", record["kun"])
     if kun_group is not None:
         reading_groups.append(kun_group)
-    if reading_groups:
-        body.append({
-            "tag": "div",
-            "data": {"beeRole": "readings"},
-            "content": reading_groups,
-        })
+    if not reading_groups:
+        return None
+    return {
+        "tag": "details",
+        "data": {"beeRole": "section"},
+        "content": [
+            {"tag": "summary", "content": "All readings"},
+            {"tag": "div", "data": {"beeRole": "readings"}, "content": reading_groups},
+        ],
+    }
 
-    # Meaning: a compact, distinct hierarchy line (not merged with readings).
-    if record["senses"]:
-        body.append({
-            "tag": "div",
-            "data": {"beeRole": "meaning"},
-            "content": "; ".join(record["senses"]),
-        })
 
-    # Badges: a small aligned row. rank / grade / JLPT / strokes, known only.
+def _metadata_disclosure(record):
+    """Collapsed rank / grade / JLPT / strokes disclosure."""
     badges = []
     if record["frequency_rank"] is not None:
         badges.append(_badge_node(f"Rank {record['frequency_rank']}"))
@@ -1008,30 +1153,34 @@ def _detail_content(record, enrichment=None):
         badges.append(_badge_node(f"JLPT {jl}"))
     if record["stroke_count"] is not None:
         badges.append(_badge_node(f"{record['stroke_count']} strokes"))
-    if badges:
-        body.append({
-            "tag": "div",
-            "data": {"beeRole": "badge-row"},
-            "content": badges,
-        })
+    if not badges:
+        return None
+    return {
+        "tag": "details",
+        "data": {"beeRole": "section"},
+        "content": [
+            {"tag": "summary", "content": "Details"},
+            {"tag": "div", "data": {"beeRole": "badge-row"}, "content": badges},
+        ],
+    }
 
-    # Reading-distribution donut: truthful share of Jiten vocabulary entries by
-    # reading over the full group totals. Omitted (never faked) when absent.
-    donut = build_donut_node(record)
-    if donut is not None:
-        body.append(donut)
 
-    # Example words grouped by reading with honest On/Kun/Other labels + ruby.
+def _more_vocab_disclosure(record):
+    """Collapsed additional vocabulary grouped by reading (beyond the six)."""
+    groups = []
+    shown = {(w["word_id"], w["reading_index"]) for w in (record.get("global_words") or [])}
     for group in record["examples"]:
         items = []
         for ex in group["words"]:
+            if (ex["word_id"], ex["reading_index"]) in shown:
+                continue
             line = [{"tag": "span", "data": {"beeRole": "vocab-word"},
-                     "content": _ruby_node(ex["ruby"])},
+                     "lang": "ja", "content": _ruby_node(ex["ruby"])},
                     {"tag": "span", "data": {"beeRole": "vocab-gloss"},
                      "content": " \u2014 " + ex["gloss"]}]
             items.append({"tag": "li", "data": {"beeRole": "vocab-item"}, "content": line})
         if items:
-            body.append({
+            groups.append({
                 "tag": "div",
                 "data": {"beeRole": "vocab-group"},
                 "content": [
@@ -1040,10 +1189,94 @@ def _detail_content(record, enrichment=None):
                     {"tag": "ul", "data": {"beeRole": "vocab-list"}, "content": items},
                 ],
             })
+    if not groups:
+        return None
+    return {
+        "tag": "details",
+        "data": {"beeRole": "section"},
+        "content": [
+            {"tag": "summary", "content": "More vocabulary"},
+            {"tag": "div", "data": {"beeRole": "more-vocab"}, "content": groups},
+        ],
+    }
 
-    # Learning aids fold into a keyboard-accessible progressive-disclosure
-    # section so the core entry stays compact. Only added when enrichment data
-    # actually exists for this character (never an empty, misleading section).
+
+def _detail_content(record, enrichment=None):
+    """Build the structured-content body for a term entry's detail item.
+
+    The compact card puts only the highest-value material above the fold, in a
+    fixed order:
+
+      1. a HERO header pairing the kanji glyph with its keyword,
+      2. the TOP THREE readings by Jiten vocabulary-entry totals as plain chips
+         (not split into On/Kun groups),
+      3. a compact meaning line,
+      4. the reading-distribution chart as a packaged raster PNG (omitted, never
+         faked, for KANJIDIC2-only records) with alt text + a visible legend,
+      5. exactly SIX globally highest-frequency de-duplicated words in a
+         responsive two-column (3-left / 3-right) grid with ruby + gloss.
+
+    Everything secondary -- the complete On/Kun lists, rank/grade/JLPT/strokes,
+    additional vocabulary, the stroke-order diagram, the phonetic family, and
+    sources -- lives in collapsed Yomitan ``details`` disclosures BELOW the
+    fold. Every graphic still has a real text equivalent (chip text, legend,
+    alt text, badge text), so colour or CSS is never the only carrier of
+    information. Empty disclosures are never emitted.
+    """
+    char = record["character"]
+    keyword = record["keyword"] or char
+    body = []
+
+    # 1. Hero header: the glyph paired with its keyword.
+    body.append({
+        "tag": "div",
+        "data": {"beeRole": "hero"},
+        "content": [
+            {"tag": "span", "data": {"beeRole": "hero-glyph"},
+             "lang": "ja", "content": char},
+            {"tag": "span", "data": {"beeRole": "hero-keyword"}, "content": keyword},
+        ],
+    })
+
+    # 2. Top readings by Jiten vocabulary totals (mixed chips, no On/Kun split).
+    chip_row = _top_reading_chip_row(record)
+    if chip_row is not None:
+        body.append(chip_row)
+
+    # 3. Meaning: a compact, distinct hierarchy line.
+    if record["senses"]:
+        body.append({
+            "tag": "div",
+            "data": {"beeRole": "meaning"},
+            "content": "; ".join(record["senses"]),
+        })
+
+    # 4. Reading-distribution chart as a packaged raster PNG. Omitted (never
+    #    faked) when the record has no valid Jiten reading totals.
+    chart = build_reading_chart_node(record)
+    if chart is not None:
+        body.append(chart)
+
+    # 5. Exactly six globally highest-frequency words in a two-column grid.
+    grid = _global_vocab_grid(record)
+    if grid is not None:
+        body.append(grid)
+
+    # 6. Secondary material -> collapsed, keyboard-accessible disclosures.
+    reading_section = _reading_disclosure(record)
+    if reading_section is not None:
+        body.append(reading_section)
+
+    meta_section = _metadata_disclosure(record)
+    if meta_section is not None:
+        body.append(meta_section)
+
+    more_vocab = _more_vocab_disclosure(record)
+    if more_vocab is not None:
+        body.append(more_vocab)
+
+    # Learning aids (phonetic family + stroke-order diagram) stay in their own
+    # collapsed section, only when enrichment data actually exists.
     if enrichment:
         aids = []
         fam = (enrichment.get("families_by_char") or {}).get(char)
@@ -1306,10 +1539,28 @@ STYLES_CSS = """\
   white-space: nowrap;
 }
 
+/* Compact above-the-fold reading chips: a single wrapping row of the top
+   readings by Jiten vocabulary totals (no On/Kun split above the fold). */
+[data-sc-bee-role="reading-chips"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--bee-gap, 0.35em);
+  margin: 0.3em 0;
+}
+[data-sc-bee-role="reading-chip"] {
+  display: inline-block;
+  padding: 0.05em 0.5em;
+  border: 1px solid var(--bee-chip-border, currentColor);
+  border-radius: 999px;
+  background: var(--bee-chip-bg, transparent);
+  font-size: 0.95em;
+  white-space: nowrap;
+}
+
 /* Meaning: a distinct, compact hierarchy line -- not merged with readings. */
 [data-sc-bee-role="meaning"] { margin: 0.3em 0; }
 
-/* Badges: a small aligned, wrapping row of metadata pills. */
+/* Badges: a small aligned, wrapping row of metadata pills (inside disclosures). */
 [data-sc-bee-role="badge-row"] {
   display: flex;
   flex-wrap: wrap;
@@ -1327,7 +1578,22 @@ STYLES_CSS = """\
   color: var(--bee-muted, currentColor);
 }
 
-/* Vocabulary grouped by reading: readable ruby, quiet glosses. */
+/* Six globally-highest-frequency words in a responsive two-column grid
+   (3 left / 3 right on ordinary popups). Each cell carries ruby + a quiet
+   gloss. On a narrow popup the grid collapses to a single column (below). */
+[data-sc-bee-role="vocab-grid"] {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.1em 1em;
+  margin: 0.4em 0;
+}
+[data-sc-bee-role="vocab-grid"] > [data-sc-bee-role="vocab-item"] {
+  margin: 0.1em 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Additional vocabulary (inside the "More vocabulary" disclosure). */
 [data-sc-bee-role="vocab-group"] { margin: 0.4em 0; }
 [data-sc-bee-role="vocab-label"] {
   font-size: 0.8em;
@@ -1352,12 +1618,14 @@ STYLES_CSS = """\
   }
 }
 
-/* Narrow / mobile-sized popups: let the hero, chips, badges, and the donut
-   legend stack instead of overflowing a compact pane. */
+/* Narrow / mobile-sized popups: stack the hero, chips, and chart, and collapse
+   the six-word vocabulary grid to a single column instead of overflowing a
+   compact pane. */
 @media (max-width: 24em) {
   [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
-  [data-sc-bee-role="donut-ring"] { display: block; margin: 0 auto 0.4em; }
+  [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
+  [data-sc-bee-role="reading-chart"] { display: block; margin: 0 auto 0.4em; }
   [data-sc-bee-role="donut-legend"] { display: block; }
 }
 
@@ -1372,26 +1640,19 @@ STYLES_CSS = """\
   outline-offset: 2px;
 }
 
-/* Reading-share donut: a share of Jiten vocabulary entries by reading. The ring
-   is a conic-gradient disc (inline background) with a punched hole; the visible
-   caption, legend, and disclaimer carry the same data as truthful text. */
+/* Reading-distribution chart: a packaged raster PNG (donut) plus a visible text
+   legend carrying the same data. The image is bounded and scoped; the caption
+   and legend degrade gracefully if the image cannot load. */
 [data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
 [data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; }
 [data-sc-bee-role="donut-graphic"] { display: inline-block; vertical-align: middle; }
-[data-sc-bee-role="donut-ring"] {
+[data-sc-bee-role="reading-chart"] {
   display: inline-block;
-  width: 3.2em;
-  height: 3.2em;
-  border-radius: 50%;
+  width: 4.6em;
+  height: 4.6em;
+  max-width: 40%;
   vertical-align: middle;
   margin-right: 0.6em;
-}
-[data-sc-bee-role="donut-hole"] {
-  width: 1.6em;
-  height: 1.6em;
-  margin: 0.8em;
-  border-radius: 50%;
-  background: var(--background-color, #ffffff);
 }
 [data-sc-bee-role="donut-legend"] {
   display: inline-block;
@@ -1557,11 +1818,20 @@ def content_hash(banks, assets=None, source_counts=None,
             ),
             "styles.css": STYLES_CSS,
             "LICENSE-data.txt": LICENSE_DATA_TEXT,
-            "LICENSE-kanjivg.txt": LICENSE_KANJIVG_TEXT if assets else None,
+            "LICENSE-kanjivg.txt": LICENSE_KANJIVG_TEXT if (
+                assets and any(str(p).lower().endswith(".svg") for p in assets)
+            ) else None,
         },
     }
     if assets:
-        material["assets"] = {k: assets[k] for k in sorted(assets)}
+        material["assets"] = {
+            k: (
+                "sha256:" + hashlib.sha256(assets[k]).hexdigest()
+                if isinstance(assets[k], (bytes, bytearray))
+                else assets[k]
+            )
+            for k in sorted(assets)
+        }
     payload = dump_json(material)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -1575,6 +1845,8 @@ def _zip_member(name, data):
     info.compress_type = zipfile.ZIP_DEFLATED
     info.external_attr = (0o644 & 0xFFFF) << 16  # -rw-r--r--
     info.create_system = 3  # unix
+    if isinstance(data, str):
+        data = data.encode("utf-8")
     return info, data
 
 
@@ -1598,7 +1870,7 @@ def build_zip(banks, revision, assets=None, manifest=None):
         members.append((filename, dump_json(banks[key])))
     members.append(("styles.css", STYLES_CSS))
     members.append(("LICENSE-data.txt", LICENSE_DATA_TEXT))
-    if assets:
+    if any(str(path).lower().endswith(".svg") for path in assets):
         members.append(("LICENSE-kanjivg.txt", LICENSE_KANJIVG_TEXT))
     # Sort asset paths for deterministic ordering irrespective of insertion.
     for path in sorted(assets):
@@ -1606,8 +1878,8 @@ def build_zip(banks, revision, assets=None, manifest=None):
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        for name, text in members:
-            info, data = _zip_member(name, text.encode("utf-8"))
+        for name, payload in members:
+            info, data = _zip_member(name, payload)
             zf.writestr(info, data)
     return buf.getvalue()
 
@@ -2008,6 +2280,15 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         present = [r["character"] for r in records]
         svgs = fetch_kanjivg_all(present, kanjivg_cache_dir, date, kanjivg_fetcher)
         enrichment = assemble_enrichment(svgs, ranks)
+
+    # Generate the per-entry reading-distribution PNG media for every record
+    # that carries a truthful Jiten reading total, and bundle each as a packaged
+    # asset the term card references by path. Records without a distribution
+    # (KANJIDIC2-only fallbacks) get no chart and no asset -- never faked.
+    for r in records:
+        png = build_reading_distribution_png(r)
+        if png is not None:
+            enrichment["assets"][reading_distribution_asset_name(r["character"])] = png
 
     banks = build_banks(records, aliases or {}, enrichment=enrichment)
     source_counts = {"jiten": jiten_count, "kanjidic2": kanjidic2_count}

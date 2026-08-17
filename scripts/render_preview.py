@@ -81,11 +81,21 @@ def main():
                                 str(ROOT / "kanjivg-cache"), "2026-08-16")
     enr = bk.assemble_enrichment(svgs, ranks)
 
-    # Write assets next to the HTML so <img src="kanjivg/..."> resolves.
-    for path, text in enr["assets"].items():
+    # Per-entry reading-distribution PNG charts (packaged as binary media).
+    for r in recs:
+        png = bk.build_reading_distribution_png(r)
+        if png is not None:
+            enr["assets"][bk.reading_distribution_asset_name(r["character"])] = png
+
+    # Write assets next to the HTML so <img src="..."> resolves. SVGs are text,
+    # reading-distribution charts are PNG bytes.
+    for path, data in enr["assets"].items():
         p = out_path.parent / path
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
+        if isinstance(data, (bytes, bytearray)):
+            p.write_bytes(data)
+        else:
+            p.write_text(data, encoding="utf-8")
 
     blocks = []
     for r in recs:

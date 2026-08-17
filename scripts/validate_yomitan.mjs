@@ -68,8 +68,11 @@ const nameSet = new Set(names);
 let ok = true;
 
 // Only media assets may live in a subfolder; everything else is root-only.
+// Permitted media: sanitized KanjiVG stroke SVGs and per-entry
+// reading-distribution PNG charts.
+const MEDIA_MEMBER = /^(?:kanjivg\/[0-9a-f]+\.svg|reading-distribution\/[0-9a-f]+\.png)$/;
 for (const name of names) {
-  if (name.includes("/") && !/^kanjivg\/[0-9a-f]+\.svg$/.test(name)) {
+  if (name.includes("/") && !MEDIA_MEMBER.test(name)) {
     console.error(`FAIL: unexpected non-root member: ${name}`);
     ok = false;
   }

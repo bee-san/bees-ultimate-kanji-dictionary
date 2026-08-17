@@ -55,10 +55,10 @@ def test_reading_chips_and_badges_wrap_for_narrow_popups():
 
 def test_dark_theme_adaptation_present_and_no_hardcoded_white_card():
     assert "prefers-color-scheme: dark" in CSS
-    # the donut hole falls back to the viewer's background token, not solid #fff
-    hole = CSS[CSS.index('[data-sc-bee-role="donut-hole"]'):]
-    hole = hole[: hole.index("}") + 1]
-    assert "--background-color" in hole  # inherits Yomitan's theme background
+    # the card never paints a solid white background; it inherits the viewer's
+    # theme. The reading chart is a transparent PNG (no punched white hole).
+    assert "#ffffff" not in CSS and "#fff;" not in CSS
+    assert 'data-sc-bee-role="donut-hole"' not in CSS
 
 
 def test_narrow_media_query_lets_donut_legend_stack():

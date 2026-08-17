@@ -101,7 +101,7 @@ def test_fallback_banks_are_honest_no_freq_no_donut_no_enrichment():
     assert "%" not in blob
     assert "phonetic-family" not in blob
     assert "stroke-order" not in blob
-    assert bk.build_donut_node(rec) is None
+    assert bk.build_reading_chart_node(rec) is None
 
 
 # --- merge (Jiten wins, unique, valid, deterministic) -----------------------
