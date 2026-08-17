@@ -32,6 +32,22 @@ def test_referenced_screenshots_exist():
         assert (ROOT / rel).is_file(), f"missing README asset: {rel}"
 
 
+def test_screenshots_are_genuine_real_yomitan_captures():
+    # The README screenshot strip must show GENUINE captures of the dictionary
+    # imported into the official Yomitan UI (not generated package previews),
+    # sourced from docs/images/real-yomitan/, and must not mislabel a preview
+    # as a real Yomitan screenshot.
+    links = _local_image_links(README)
+    hero = [rel for rel in links if "real-yomitan/" in rel]
+    assert hero, "README must reference genuine real-Yomitan captures under docs/images/real-yomitan/"
+    for rel in hero:
+        assert (ROOT / rel).is_file(), f"missing real-Yomitan capture: {rel}"
+    low = README.lower()
+    assert "real yomitan" in low or "official yomitan" in low, (
+        "README screenshot caption must state the captures are from real/official Yomitan"
+    )
+
+
 def test_download_and_update_urls_match_generator():
     # The README must point at the same canonical download + auto-update URLs
     # the generator writes into index.json, so the docs never drift from code.

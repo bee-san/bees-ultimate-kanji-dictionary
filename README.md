@@ -10,14 +10,22 @@ coverage and [KanjiVG](https://kanjivg.tagaini.net/) learning aids.
 
 ## Screenshots
 
-Each image is rendered from the exact structured content, `styles.css`, and
-bundled KanjiVG assets inside the shipped release ZIP. They show 場, a fully
-enriched Jiten-sourced entry; KANJIDIC2 fallback characters render a plainer
-card with just readings, meanings, and stroke data.
+These are genuine, unmodified screenshots of the dictionary imported from the
+canonical release ZIP into the **official Yomitan** extension (Yomitan Popup
+Dictionary 26.7.29.0) — real Yomitan search results, not generated previews.
+場 and 生 are fully enriched Jiten entries; a KANJIDIC2-only fallback character
+renders a plainer card with just readings, meanings, and stroke data. A
+full visual acceptance inventory lives in
+[`docs/visual-qa/feature-inventory.md`](docs/visual-qa/feature-inventory.md).
 
-| Compact entry (場) | Expanded learning aids | Narrow / reduced-motion |
+| Enriched entry (生) | Expanded learning aids (生) | Narrow / reduced-motion (場) |
 | :---: | :---: | :---: |
-| ![Compact Yomitan popup card for the kanji 場, showing keyword, on/kun readings, common vocabulary grouped by reading, and a reading-share donut, with the Learning aids section collapsed.](docs/images/entry-compact.png) | ![The same 場 entry with the Learning aids disclosure expanded, revealing the phonetic family, a static KanjiVG stroke-order diagram, and stroke-count fallback text.](docs/images/entry-expanded.png) | ![The 場 entry in a narrow viewport showing the static stroke diagram and text fallbacks without animation.](docs/images/entry-narrow.png) |
+| ![Real Yomitan search result for the kanji 生, showing the keyword "life", labelled On/Kun reading chips, meanings, a Rank/Grade/JLPT/stroke badge row, the coloured reading-share donut with its legend and entry counts, and common vocabulary grouped by reading with furigana.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry in real Yomitan with the Learning aids disclosure expanded, revealing the static KanjiVG stroke-order diagram (with numbered strokes) and the stroke-count text fallback.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 360px Yomitan popup, showing the reading-share donut, grouped vocabulary, and the static stroke diagram wrapping cleanly without clipping or animation.](docs/images/real-yomitan/ba-narrow-expanded.png) |
+
+The KANJIDIC2 fallback is deliberately plain — no invented donut, ranks, or
+examples:
+
+![Real Yomitan search result for the KANJIDIC2-only fallback kanji 㐆, showing only the keyword, English meanings, and the stroke count, with no reading-share donut and no example vocabulary.](docs/images/real-yomitan/kanjidic2-fallback-compact-light.png)
 
 ## Install
 
