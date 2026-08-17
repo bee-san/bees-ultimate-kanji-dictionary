@@ -17,7 +17,7 @@ card with just readings, meanings, and stroke data.
 
 | Compact entry (場) | Expanded learning aids | Narrow / reduced-motion |
 | :---: | :---: | :---: |
-| ![Compact Yomitan popup card for the kanji 場, showing keyword, on/kun readings, common vocabulary grouped by reading, and a reading-share donut, with the Learning aids section collapsed.](docs/images/entry-compact.png) | ![The same 場 entry with the Learning aids disclosure expanded, revealing the phonetic family, an animated KanjiVG stroke-order diagram, and stroke-count fallback text.](docs/images/entry-expanded.png) | ![The 場 entry in a narrow viewport with prefers-reduced-motion honoured, showing the static stroke diagram and text fallbacks without animation.](docs/images/entry-narrow.png) |
+| ![Compact Yomitan popup card for the kanji 場, showing keyword, on/kun readings, common vocabulary grouped by reading, and a reading-share donut, with the Learning aids section collapsed.](docs/images/entry-compact.png) | ![The same 場 entry with the Learning aids disclosure expanded, revealing the phonetic family, a static KanjiVG stroke-order diagram, and stroke-count fallback text.](docs/images/entry-expanded.png) | ![The 場 entry in a narrow viewport showing the static stroke diagram and text fallbacks without animation.](docs/images/entry-narrow.png) |
 
 ## Install
 
@@ -40,8 +40,8 @@ card with just readings, meanings, and stroke data.
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
-- **KanjiVG** stroke-order diagrams (reduced-motion guarded, with text
-  fallback) and source-marked phonetic families.
+- Static **KanjiVG** stroke-order diagrams (high-contrast and motion-free, with
+  text fallback) and source-marked phonetic families.
 - Accessible, compact CSS scoped to this dictionary's own markers; keyboard and
   screen-reader friendly.
 - One self-updating canonical ZIP — no editions to choose between.

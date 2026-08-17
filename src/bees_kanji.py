@@ -793,6 +793,10 @@ def build_phonetic_family_node(character, family):
 _SVG_NS = "http://www.w3.org/2000/svg"
 _KVG_ELEMENT = re.compile(r'kvg:element="([^"]+)"')
 _KVG_PATH = re.compile(r'<path\b[^>]*\bd="([^"]+)"[^>]*>')
+_KVG_STROKE_NUMBER = re.compile(
+    r'<text transform="matrix\(1 0 0 1 ([0-9]+(?:\.[0-9]+)?) '
+    r'([0-9]+(?:\.[0-9]+)?)\)">([1-9][0-9]*)</text>'
+)
 
 
 def kanjivg_asset_name(character):
@@ -827,56 +831,41 @@ def parse_kanjivg(svg_text, character):
     }
 
 
-# Deterministic, dependency-free stroke-order animation. Each stroke is drawn in
-# sequence via stroke-dashoffset; the final frame leaves every stroke fully
-# drawn so a browser that ignores SVG animation still shows the complete glyph.
-# prefers-reduced-motion shows the finished glyph immediately (no motion).
-_STROKE_STYLE_TEMPLATE = (
-    "<style>"
-    ":root{{color:#1f1f1f;}}"
-    "@media (prefers-color-scheme:dark){{:root{{color:#e8e8e8;}}}}"
-    "@keyframes beeDraw{{to{{stroke-dashoffset:0;}}}}"
-    "@media (prefers-reduced-motion:no-preference){{"
-    ".bee-stroke{{stroke-dasharray:1000;stroke-dashoffset:1000;"
-    "animation:beeDraw 0.8s linear forwards;}}"
-    "{rules}"
-    "}}"
-    "@media (prefers-reduced-motion:reduce){{"
-    ".bee-stroke{{animation:none;stroke-dashoffset:0;}}}}"
-    "</style>"
-)
-
-
 def sanitize_kanjivg_svg(svg_text, character):
-    """Rebuild a minimal, safe, animated SVG from a KanjiVG source string.
+    """Rebuild a minimal, safe, static SVG from a KanjiVG source string.
 
     Strips the XML declaration, DOCTYPE, comments, kvg namespaced attributes,
-    stroke-number labels, and anything script/external (scripts, event
-    handlers, xlink, <image>). Rebuilds a clean <svg> containing only the stroke
-    <path> geometry plus an internal <style> block driving a deterministic,
-    reduced-motion-guarded stroke-order animation. Output is deterministic.
+    labels that do not match KanjiVG's strict numeric form, and anything
+    script/external (scripts, event handlers, xlink, <image>). Rebuilds a clean
+    <svg> containing the stroke <path> geometry and safe stroke numbers as a
+    deterministic, static high-contrast stroke-order diagram. Yomitan rasterizes
+    dictionary media into a canvas, so animation is intentionally omitted.
+    Output is deterministic and safe for reduced-motion users.
     """
     paths = _KVG_PATH.findall(svg_text)
-    # Per-stroke staggered start so strokes animate in order; delays are fixed.
-    rules = []
-    for i in range(len(paths)):
-        delay = round(i * 0.6, 2)
-        rules.append(
-            f".bee-stroke:nth-of-type({i + 1}){{animation-delay:{delay}s;}}"
-        )
-    style = _STROKE_STYLE_TEMPLATE.format(rules="".join(rules))
-
-    path_els = "".join(
-        f'<path class="bee-stroke" fill="none" stroke="currentColor" '
+    outlines = "".join(
+        f'<path class="bee-stroke-outline" fill="none" stroke="#ffffff" '
+        f'stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="{d}"/>'
+        for d in paths
+    )
+    inks = "".join(
+        f'<path class="bee-stroke-ink" fill="none" stroke="#0072b2" '
         f'stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="{d}"/>'
         for d in paths
+    )
+    numbers = "".join(
+        f'<text class="bee-stroke-number" x="{x}" y="{y}" '
+        'font-family="sans-serif" font-size="8" font-weight="700" '
+        'fill="#0072b2" stroke="#ffffff" stroke-width="2" '
+        f'paint-order="stroke" stroke-linejoin="round">{number}</text>'
+        for x, y, number in _KVG_STROKE_NUMBER.findall(svg_text)
     )
     title = f"Stroke order for {character}"
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 109 109" '
         'width="109" height="109" role="img" '
         f'aria-label="{title}"><title>{title}</title>'
-        f"{style}{path_els}</svg>"
+        f"{outlines}{inks}{numbers}</svg>"
     )
 
 

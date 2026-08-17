@@ -1,11 +1,11 @@
-"""RED tests: KanjiVG stroke/component enrichment, sanitization, animation.
+"""RED tests: KanjiVG stroke/component enrichment and sanitization.
 
 Only license-compatible KanjiVG data is used. Parsing yields deterministic
 component and stroke information. Sanitization strips scripts, external refs,
-DOCTYPE, comments, and kvg namespaced attributes, and injects a lightweight
-CSS stroke-order animation that respects reduced motion and leaves a fully
-drawn static glyph as the fallback. The structured-content node references the
-bundled SVG via img with alt text plus a text component/stroke line so nothing
+DOCTYPE, comments, and kvg namespaced attributes, and rebuilds a motion-free,
+high-contrast diagram with sanitized stroke numbers. The structured-content
+node references the bundled SVG via img with alt text plus a text
+component/stroke line so nothing
 depends on media, script, SVG, or a character asset being available.
 """
 import bees_kanji as bk
@@ -26,7 +26,10 @@ SEI_SVG = (
     '<path id="kvg:0751f-s4" kvg:type="x" d="M29,64c2.6,0.6 42-3 50-4"/>\n'
     '<path id="kvg:0751f-s5" kvg:type="x" d="M15,90c3,0.7 68-4 78-4"/>\n'
     '</g></g>\n'
-    '<g id="kvg:StrokeNumbers_0751f" style="font-size:8"><text>1</text></g>\n'
+    '<g id="kvg:StrokeNumbers_0751f" style="font-size:8">\n'
+    '<text transform="matrix(1 0 0 1 20.00 20.00)">1</text>\n'
+    '<text transform="matrix(1 0 0 1 25.50 35.25)">2</text>\n'
+    '</g>\n'
     '</svg>\n'
 )
 
@@ -59,30 +62,34 @@ def test_sanitize_strips_unsafe_and_namespaced_content():
     assert "on" + "load" not in lowered    # no event handlers
     # still a valid-looking svg carrying the stroke paths
     assert out.startswith("<svg")
-    assert out.count("<path") == 5
+    assert out.count("<path") == 10
 
 
-def test_sanitize_injects_reduced_motion_guarded_animation():
+def test_sanitize_uses_a_static_diagram_safe_for_reduced_motion_and_canvas_snapshots():
     out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
-    assert "@keyframes" in out                       # animation present
-    assert "prefers-reduced-motion" in out           # reduced-motion guarded
-    # final state fully drawn: animation-fill-mode forwards / dashoffset 0 end
-    assert "forwards" in out
+    assert "@keyframes" not in out
+    assert "animation" not in out
+    assert "stroke-dash" not in out
 
 
-def test_sanitized_strokes_are_visible_without_animation_or_css():
+def test_sanitized_strokes_have_a_static_base_for_yomitan_canvas_snapshots():
     out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
-    assert "prefers-reduced-motion:no-preference" in out
-    assert '<path class="bee-stroke" fill="none" stroke="currentColor"' in out
-    default_rule = out.split("@media", 1)[0]
-    assert "stroke-dashoffset:1000" not in default_rule
+    assert out.count('class="bee-stroke-outline"') == 5
+    assert out.count('class="bee-stroke-ink"') == 5
+
+
+def test_sanitized_static_diagram_retains_safe_stroke_order_numbers():
+    out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
+    assert out.count('class="bee-stroke-number"') == 2
+    assert '<text class="bee-stroke-number" x="20.00" y="20.00"' in out
+    assert 'paint-order="stroke"' in out
 
 
 def test_sanitized_strokes_remain_legible_in_dark_embedded_images():
     out = bk.sanitize_kanjivg_svg(SEI_SVG, "\u751f")
-    assert ":root{color:#1f1f1f;}" in out
-    assert "@media (prefers-color-scheme:dark)" in out
-    assert ":root{color:#e8e8e8;}" in out
+    assert 'stroke="#ffffff" stroke-width="5"' in out
+    assert 'stroke="#0072b2" stroke-width="3"' in out
+    assert "prefers-color-scheme" not in out
 
 
 def test_sanitize_deterministic_bytes():
@@ -99,6 +106,14 @@ def test_stroke_node_references_asset_with_text_fallback():
     # alt / text fallback naming stroke count so info survives without the image
     assert "5" in blob
     assert "stroke" in blob.lower()
+
+
+def test_stroke_node_preserves_baked_high_contrast_colours_in_yomitan():
+    info = {"stroke_count": 5, "components": ["生"], "asset": "kanjivg/0751f.svg"}
+    node = bk.build_stroke_node("生", info)
+    image = node["content"][0]
+    assert image["tag"] == "img"
+    assert "appearance" not in image
 
 
 def test_stroke_node_text_only_when_no_asset():

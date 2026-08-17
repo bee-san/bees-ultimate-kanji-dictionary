@@ -63,3 +63,9 @@ def test_reading_share_semantics_stated_truthfully():
     low = README.lower()
     assert "jiten vocabulary entries by reading" in low
     assert "not" in low and ("occurrence" in low or "usage frequency" in low)
+
+
+def test_stroke_diagram_is_documented_as_static():
+    low = README.lower()
+    assert "static kanjivg stroke-order diagram" in low
+    assert "animated kanjivg" not in low
