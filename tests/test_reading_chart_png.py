@@ -46,15 +46,28 @@ def test_asset_name_is_zero_padded_codepoint_under_reading_distribution():
     assert bk.reading_distribution_asset_name("生") == f"reading-distribution/{ord('生'):05x}.png"
 
 
-def test_png_bytes_are_real_128x128_rgba_png():
+def test_png_bytes_are_a_real_high_resolution_square_rgba_png():
+    # The packaged raster must be genuinely legible when the popup shows it as a
+    # prominent ~13-16rem chart, so the SOURCE pixels must be high-resolution:
+    # at least 512x512, square, RGBA, real PNG. A tiny 128px source looks blurry
+    # blown up to a large on-screen chart.
     png = bk.build_reading_distribution_png(rec("場.json"))
     assert png is not None
     assert png[:8] == PNG_SIG, "not a PNG signature"
     from PIL import Image
     img = Image.open(io.BytesIO(png))
     assert img.format == "PNG"
-    assert img.size == (128, 128)
+    w, h = img.size
+    assert w == h, f"chart must be square, got {img.size}"
+    assert w >= 512, f"source raster too small to be legible when enlarged: {img.size}"
     assert img.mode == "RGBA"
+
+
+def test_reading_chart_size_constant_is_at_least_512():
+    # Deterministic guard on the source-pixel contract: the module constant that
+    # sets the packaged raster's canvas must stay >= 512 so a future edit cannot
+    # silently shrink it back to a tiny, blurry image.
+    assert bk.READING_CHART_SIZE >= 512
 
 
 def test_png_is_deterministic():

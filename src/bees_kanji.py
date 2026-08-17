@@ -639,9 +639,10 @@ def _segment_label(segment):
 # A raster image is what official Yomitan renders from an archive `path`, so it
 # survives every renderer / theme without relying on inline gradient support.
 
-# Fixed square canvas. 128px keeps the packaged bytes tiny while staying crisp
-# when the popup scales the image down to a few em.
-READING_CHART_SIZE = 128
+# Fixed square canvas. A high-resolution 512px source stays crisp when the popup
+# shows it as a prominent ~13-16rem chart (a tiny 128px source looks blurry once
+# blown up); the deterministic PNG encoder keeps the packaged bytes reasonable.
+READING_CHART_SIZE = 512
 
 
 def _hex_to_rgba(hex_color, alpha=255):
@@ -666,7 +667,8 @@ def build_reading_distribution_png(record):
     Deterministic: the same record always yields byte-identical output. Uses the
     same truthful segment data as :func:`reading_distribution` (share of Jiten
     vocabulary entries by reading), drawn as an anti-aliased donut ring on a
-    128x128 transparent RGBA canvas. Returns ``None`` when the record has no
+    high-resolution transparent RGBA canvas (READING_CHART_SIZE px square).
+    Returns ``None`` when the record has no
     valid positive Jiten reading total (e.g. KANJIDIC2-only records), so the
     caller omits the chart rather than fabricating one.
     """
@@ -747,8 +749,8 @@ def build_reading_chart_node(record):
         "tag": "img",
         "data": {"beeRole": "reading-chart"},
         "path": reading_distribution_asset_name(record["character"]),
-        "width": 4.6,
-        "height": 4.6,
+        "width": 14,
+        "height": 14,
         "sizeUnits": "em",
         "alt": alt,
         "title": alt,
@@ -1630,6 +1632,7 @@ STYLES_CSS = """\
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
   [data-sc-bee-role="donut-graphic"] { display: block; margin: 0 auto 0.4em; }
+  [data-sc-bee-role="donut-graphic"] .gloss-image-container { width: 100%; max-width: 11rem; }
   [data-sc-bee-role="donut-legend"] { display: block; }
 }
 
@@ -1655,27 +1658,28 @@ STYLES_CSS = """\
    wrappers, scoped under our own donut-graphic <div> (a div IS preserved with
    its data-sc marker, unlike the img). */
 [data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
-[data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; }
+[data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; text-align: center; }
 [data-sc-bee-role="donut-graphic"] {
-  display: inline-block;
-  vertical-align: middle;
-  margin-right: 0.6em;
+  display: block;
+  margin: 0 auto 0.5em;
+  text-align: center;
 }
 [data-sc-bee-role="donut-graphic"] .gloss-image-link {
   display: inline-block;
   vertical-align: middle;
 }
 [data-sc-bee-role="donut-graphic"] .gloss-image-container {
-  width: 4.6em;
-  max-width: 40%;
+  width: 14rem;
+  max-width: 100%;
   vertical-align: middle;
 }
 [data-sc-bee-role="donut-legend"] {
-  display: inline-block;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
   list-style: none;
-  margin: 0;
   padding: 0;
-  vertical-align: middle;
   font-size: 0.9em;
 }
 [data-sc-bee-role="donut-swatch"] {
