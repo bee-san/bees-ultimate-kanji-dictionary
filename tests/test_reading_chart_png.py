@@ -46,7 +46,7 @@ def test_asset_name_is_zero_padded_codepoint_under_reading_distribution():
     assert bk.reading_distribution_asset_name("生") == f"reading-distribution/{ord('生'):05x}.png"
 
 
-def test_png_bytes_are_real_128x128_rgba_png():
+def test_png_bytes_are_real_128x128_paletted_png():
     png = bk.build_reading_distribution_png(rec("場.json"))
     assert png is not None
     assert png[:8] == PNG_SIG, "not a PNG signature"
@@ -54,7 +54,10 @@ def test_png_bytes_are_real_128x128_rgba_png():
     img = Image.open(io.BytesIO(png))
     assert img.format == "PNG"
     assert img.size == (128, 128)
-    assert img.mode == "RGBA"
+    # The donut is a compact fixed-palette image with a transparent index, not a
+    # bulky truecolor RGBA raster (see test_reading_chart_palette.py).
+    assert img.mode == "P"
+    assert "transparency" in img.info
 
 
 def test_png_is_deterministic():

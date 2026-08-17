@@ -132,3 +132,78 @@ def test_link_href_matches_schema_internal_pattern():
         links = [n for n in _walk(detail) if isinstance(n, dict) and n.get("tag") == "a"]
         for link in links:
             assert pattern.match(link.get("href", "")), f"{char}: bad href {link.get('href')!r}"
+
+
+# --- 3. stylesheet polish (structural, not pixel-exact) ----------------------
+
+CSS = bk.STYLES_CSS
+
+
+def _rule(selector):
+    start = CSS.index(selector)
+    return CSS[start: CSS.index("}", start) + 1]
+
+
+def test_forced_colors_high_contrast_supported():
+    """A forced-colors (Windows High Contrast) block must exist so borders and
+    swatches stay visible when the OS overrides colours -- colour is never the
+    only channel, but the card must not vanish under forced colours."""
+    assert "@media (forced-colors: active)" in CSS
+
+
+def test_query_link_styling_scoped_to_gloss_link():
+    """The clickable word links Yomitan renders as a.gloss-link inside our
+    vocab-word must be styled: they inherit text colour (not a jarring default
+    blue) and expose a visible focus outline for keyboard use."""
+    # Yomitan renders the internal link as <a class="gloss-link">, scoped under
+    # our own preserved vocab-word wrapper.
+    assert '[data-sc-bee-role="vocab-word"] .gloss-link' in CSS
+    link_rule = _rule('[data-sc-bee-role="vocab-word"] .gloss-link')
+    assert "color: inherit" in link_rule
+    # keyboard focus must be visible on the link
+    assert '.gloss-link:focus-visible' in CSS or 'gloss-link' in CSS[CSS.index(':focus-visible'):CSS.index(':focus-visible')+400] or ".gloss-link" in CSS
+
+
+def test_query_link_focus_visible():
+    assert ".gloss-link:focus-visible" in CSS
+    focus = _rule(".gloss-link:focus-visible")
+    assert "outline" in focus
+
+
+def test_ruby_annotation_is_legible():
+    """Ruby readings must not be shrunk to an illegible size; keep rt readable
+    (>= 0.6em) with a little breathing room."""
+    rt_rule = _rule('[data-sc-bee-role="vocab-word"] ruby rt')
+    # extract the font-size value
+    import re
+    m = re.search(r"font-size:\s*([0-9.]+)em", rt_rule)
+    assert m, "vocab ruby rt must set an em font-size"
+    assert float(m.group(1)) >= 0.6, "ruby annotation too small to read"
+
+
+def test_chart_and_legend_share_a_balanced_layout():
+    """The donut graphic and its legend sit side by side on desktop with the
+    legend allowed to take the remaining space (a balanced two-part layout),
+    and the reading-donut base rule is a flex container to align them."""
+    # find the base reading-donut rule that actually sets `display` (there is
+    # also a narrow-media override, so match the block containing display).
+    import re
+    blocks = re.findall(
+        r'\[data-sc-bee-role="reading-donut"\]\s*\{([^}]*)\}', CSS
+    )
+    assert any("display: flex" in b or "display: grid" in b for b in blocks), (
+        "reading-donut must be a flex/grid container for a balanced chart+legend layout"
+    )
+    # the legend flexes to take remaining space (base rule, not narrow override)
+    legend_blocks = re.findall(
+        r'\[data-sc-bee-role="donut-legend"\]\s*\{([^}]*)\}', CSS
+    )
+    assert any("flex: 1" in b for b in legend_blocks), (
+        "donut-legend must flex to fill the remaining space beside the chart"
+    )
+
+
+def test_tokens_still_scoped_to_detail_wrapper():
+    """Polish must not reintroduce a :root token leak."""
+    assert ":root" not in CSS
+    assert "--bee-accent:" in _rule('[data-sc-bee-role="detail"]')

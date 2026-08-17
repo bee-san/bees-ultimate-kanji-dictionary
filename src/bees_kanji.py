@@ -666,9 +666,18 @@ def build_reading_distribution_png(record):
     Deterministic: the same record always yields byte-identical output. Uses the
     same truthful segment data as :func:`reading_distribution` (share of Jiten
     vocabulary entries by reading), drawn as an anti-aliased donut ring on a
-    128x128 transparent RGBA canvas. Returns ``None`` when the record has no
-    valid positive Jiten reading total (e.g. KANJIDIC2-only records), so the
-    caller omits the chart rather than fabricating one.
+    128x128 transparent canvas, then flattened to a compact fixed-palette
+    ("P"-mode) PNG with a single transparent index. Returns ``None`` when the
+    record has no valid positive Jiten reading total (e.g. KANJIDIC2-only
+    records), so the caller omits the chart rather than fabricating one.
+
+    The donut only ever uses the fixed Okabe-Ito segment palette on a
+    transparent field, so a paletted encoding represents it faithfully at a
+    fraction of the truecolor bytes -- keeping a release with thousands of
+    per-character charts a reasonable size without any performance framework.
+    Anti-aliased edge pixels are mapped to the nearest solid segment colour and
+    a 50%% alpha threshold decides transparency, which stays crisp and clearly
+    multi-segment at the few-em size the popup renders it.
     """
     from PIL import Image, ImageDraw
 
@@ -704,9 +713,55 @@ def build_reading_distribution_png(record):
 
     img = img.resize((READING_CHART_SIZE, READING_CHART_SIZE), Image.LANCZOS)
 
+    return _flatten_to_palette_png(img)
+
+
+def _flatten_to_palette_png(rgba):
+    """Flatten an RGBA donut to a deterministic fixed-palette PNG (bytes).
+
+    Palette index 0 is the transparent field; the remaining indices are the
+    fixed Okabe-Ito segment colours (see ``_DONUT_COLORS``). Every opaque pixel
+    is snapped to its nearest segment colour; pixels below 50%% alpha become the
+    transparent index. The palette order is fixed, so identical inputs yield
+    byte-identical output.
+    """
+    from PIL import Image
+
+    palette_rgb = [(0, 0, 0)] + [
+        (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in _DONUT_COLORS
+    ]
+    solids = palette_rgb[1:]
+
+    out = Image.new("P", rgba.size, 0)
+    src = rgba.load()
+    dst = out.load()
+    nearest_cache = {}
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            r, g, b, a = src[x, y]
+            if a < 128:
+                dst[x, y] = 0
+                continue
+            key = (r, g, b)
+            idx = nearest_cache.get(key)
+            if idx is None:
+                best_i, best_d = 1, None
+                for i, (cr, cg, cb) in enumerate(solids):
+                    d = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+                    if best_d is None or d < best_d:
+                        best_d, best_i = d, i + 1
+                idx = nearest_cache[key] = best_i
+            dst[x, y] = idx
+
+    flat = []
+    for c in palette_rgb:
+        flat.extend(c)
+    flat.extend([0, 0, 0] * (256 - len(palette_rgb)))
+    out.putpalette(flat)
+
     buf = io.BytesIO()
     # Fixed PNG encoder options + no timestamp chunk => byte-deterministic.
-    img.save(buf, format="PNG", optimize=False, compress_level=9)
+    out.save(buf, format="PNG", optimize=False, compress_level=9, transparency=0)
     return buf.getvalue()
 
 
@@ -1521,16 +1576,17 @@ STYLES_CSS = """\
   align-items: baseline;
   gap: 0.5em;
   flex-wrap: wrap;
-  margin: 0 0 0.4em;
+  margin: 0 0 0.45em;
 }
 [data-sc-bee-role="hero-glyph"] {
-  font-size: 2.4em;
+  font-size: 2.6em;
   line-height: 1;
   font-weight: 600;
 }
 [data-sc-bee-role="hero-keyword"] {
-  font-size: 1.05em;
-  font-weight: 600;
+  font-size: 1.15em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
   color: var(--bee-accent, currentColor);
 }
 
@@ -1587,7 +1643,7 @@ STYLES_CSS = """\
 }
 
 /* Meaning: a distinct, compact hierarchy line -- not merged with readings. */
-[data-sc-bee-role="meaning"] { margin: 0.3em 0; }
+[data-sc-bee-role="meaning"] { margin: 0.35em 0; font-size: 1em; line-height: 1.45; }
 
 /* Badges: a small aligned, wrapping row of metadata pills (inside disclosures). */
 [data-sc-bee-role="badge-row"] {
@@ -1608,18 +1664,41 @@ STYLES_CSS = """\
 }
 
 /* Six globally-highest-frequency words in a responsive two-column grid
-   (3 left / 3 right on ordinary popups). Each cell carries ruby + a quiet
-   gloss. On a narrow popup the grid collapses to a single column (below). */
+   (3 left / 3 right on ordinary popups). Each cell carries a clickable ruby
+   word + a quiet gloss. On a narrow popup the grid collapses to a single
+   column (below). */
 [data-sc-bee-role="vocab-grid"] {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.1em 1em;
-  margin: 0.4em 0;
+  gap: 0.18em 1.1em;
+  margin: 0.5em 0;
 }
 [data-sc-bee-role="vocab-grid"] > [data-sc-bee-role="vocab-item"] {
-  margin: 0.1em 0;
+  margin: 0.12em 0;
   min-width: 0;
   overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+/* Clickable words: Yomitan renders the internal ?query= link as
+   a.gloss-link > span.gloss-link-text. Keep it in the card's own colour (not a
+   jarring default link blue), with a restrained underline that only firms up
+   on hover/focus, and a clearly visible keyboard focus ring. No custom JS -- the
+   link navigation is Yomitan's supported internal-search behaviour. */
+[data-sc-bee-role="vocab-word"] .gloss-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--bee-chip-border, currentColor);
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+[data-sc-bee-role="vocab-word"] .gloss-link:hover {
+  text-decoration-color: var(--bee-accent, currentColor);
+}
+.gloss-link:focus-visible {
+  outline: 2px solid var(--bee-accent, currentColor);
+  outline-offset: 2px;
+  border-radius: 0.15em;
 }
 
 /* Additional vocabulary (inside the "More vocabulary" disclosure). */
@@ -1632,7 +1711,7 @@ STYLES_CSS = """\
 }
 [data-sc-bee-role="vocab-list"] { margin: 0; padding-left: 1.1em; }
 [data-sc-bee-role="vocab-item"] { margin: 0.1em 0; }
-[data-sc-bee-role="vocab-word"] ruby rt { font-size: 0.7em; }
+[data-sc-bee-role="vocab-word"] ruby rt { font-size: 0.7em; opacity: 0.8; }
 [data-sc-bee-role="vocab-gloss"] { color: var(--bee-muted, currentColor); }
 
 /* Dark theme: derive slightly stronger separators so chips/badges stay legible
@@ -1649,24 +1728,38 @@ STYLES_CSS = """\
 
 /* Narrow / mobile-sized popups: stack the hero, chips, and chart, and collapse
    the six-word vocabulary grid to a single column instead of overflowing a
-   compact pane. */
+   compact pane. The donut centres above a full-width legend. */
 @media (max-width: 24em) {
   [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
-  [data-sc-bee-role="donut-graphic"] { display: block; margin: 0 auto 0.4em; }
-  [data-sc-bee-role="donut-legend"] { display: block; }
+  [data-sc-bee-role="reading-donut"] { justify-content: center; }
+  [data-sc-bee-role="donut-graphic"] { flex-basis: 100%; text-align: center; margin: 0 0 0.35em; }
+  [data-sc-bee-role="donut-legend"] { flex-basis: 100%; }
 }
 
-/* Progressive disclosure: restrained, keyboard-focusable summaries. */
+/* Progressive disclosure: restrained, keyboard-focusable summaries with a
+   quiet separator so the collapsed sections read as a distinct secondary tier
+   below the always-visible card. */
+[data-sc-bee-role="section"] {
+  margin: 0.25em 0;
+  border-top: 1px solid var(--bee-chip-border, currentColor);
+  padding-top: 0.2em;
+}
 [data-sc-bee-role="section"] > summary {
   cursor: pointer;
+  font-size: 0.9em;
   font-weight: 600;
-  opacity: 0.85;
+  padding: 0.15em 0;
+  color: var(--bee-muted, currentColor);
+  list-style-position: inside;
 }
+[data-sc-bee-role="section"][open] > summary { color: var(--bee-accent, currentColor); }
+[data-sc-bee-role="section"] > summary:hover { color: var(--bee-accent, currentColor); }
 [data-sc-bee-role="section"] > summary:focus-visible {
-  outline: 2px solid currentColor;
+  outline: 2px solid var(--bee-accent, currentColor);
   outline-offset: 2px;
+  border-radius: 0.15em;
 }
 
 /* Reading-distribution chart: a packaged raster PNG (donut) plus a visible text
@@ -1679,12 +1772,26 @@ STYLES_CSS = """\
    sized via its own data-sc marker -- we bound the PRESERVED .gloss-image-*
    wrappers, scoped under our own donut-graphic <div> (a div IS preserved with
    its data-sc marker, unlike the img). */
-[data-sc-bee-role="reading-donut"] { margin: 0.3em 0; }
-[data-sc-bee-role="donut-caption"] { font-size: 0.9em; font-weight: 600; margin: 0 0 0.25em; }
+[data-sc-bee-role="reading-donut"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2em 0.9em;
+  margin: 0.5em 0;
+}
+[data-sc-bee-role="donut-caption"] {
+  flex-basis: 100%;
+  font-size: 0.82em;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--bee-muted, currentColor);
+  margin: 0 0 0.15em;
+}
 [data-sc-bee-role="donut-graphic"] {
   display: inline-block;
+  flex: 0 0 auto;
   vertical-align: middle;
-  margin-right: 0.6em;
 }
 [data-sc-bee-role="donut-graphic"] .gloss-image-link {
   display: inline-block;
@@ -1696,19 +1803,27 @@ STYLES_CSS = """\
   vertical-align: middle;
 }
 [data-sc-bee-role="donut-legend"] {
-  display: inline-block;
+  flex: 1 1 9em;
+  min-width: 8em;
   list-style: none;
   margin: 0;
   padding: 0;
   vertical-align: middle;
-  font-size: 0.9em;
+  font-size: 0.86em;
+  line-height: 1.55;
+}
+[data-sc-bee-role="donut-legend"] li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.1em;
 }
 [data-sc-bee-role="donut-swatch"] {
   display: inline-block;
-  width: 0.8em;
-  height: 0.8em;
-  border-radius: 0.15em;
-  margin-right: 0.4em;
+  width: 0.72em;
+  height: 0.72em;
+  border-radius: 0.18em;
+  margin-right: 0.45em;
+  flex: 0 0 auto;
   overflow: hidden;
   vertical-align: middle;
 }
@@ -1729,6 +1844,30 @@ STYLES_CSS = """\
 /* Honour reduced-motion for any bundled animation the viewer might run. */
 @media (prefers-reduced-motion: reduce) {
   [data-sc-bee-role="stroke-order"] .gloss-image { animation: none !important; }
+}
+
+/* Forced colours (Windows High Contrast): the OS replaces our colours with its
+   own system palette, and color-mix()/transparent borders can collapse to
+   nothing. Pin the card's separators, chips, badges, swatches, and focus rings
+   to system colour keywords so every element stays outlined and legible, and
+   force the legend swatches to print their assigned colour (the one place
+   colour still helps map a segment to its legend line). */
+@media (forced-colors: active) {
+  [data-sc-bee-role="reading-chip"],
+  [data-sc-bee-role="badge"] {
+    border: 1px solid CanvasText;
+  }
+  [data-sc-bee-role="section"] { border-top-color: CanvasText; }
+  [data-sc-bee-role="donut-swatch"] {
+    border: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
+  [data-sc-bee-role="vocab-word"] .gloss-link { color: LinkText; }
+  [data-sc-bee-role="vocab-word"] .gloss-link:focus-visible,
+  .gloss-link:focus-visible,
+  [data-sc-bee-role="section"] > summary:focus-visible {
+    outline: 2px solid Highlight;
+  }
 }
 """
 
