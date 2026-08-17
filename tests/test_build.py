@@ -23,6 +23,35 @@ def records():
     ]
 
 
+def _hero_keyword_text(detail):
+    """Pull the hero-keyword text out of a structured-content glossary item."""
+    def walk(node):
+        if isinstance(node, dict):
+            data = node.get("data")
+            if isinstance(data, dict) and data.get("beeRole") == "hero-keyword":
+                return _flat(node.get("content"))
+            found = walk(node.get("content"))
+            if found:
+                return found
+        elif isinstance(node, list):
+            for item in node:
+                found = walk(item)
+                if found:
+                    return found
+        return ""
+
+    def _flat(node):
+        if isinstance(node, str):
+            return node
+        if isinstance(node, dict):
+            return _flat(node.get("content"))
+        if isinstance(node, list):
+            return "".join(_flat(x) for x in node)
+        return ""
+
+    return walk(detail.get("content"))
+
+
 def test_build_banks_sorted_by_codepoint_and_shapes():
     banks = bk.build_banks(records(), aliases={"髙": "高"})
     terms = banks["term_bank"]
@@ -73,7 +102,17 @@ def test_no_junk_anywhere_in_output():
     # meaning, e.g. 率 = 'rate; %'; those are honest data, not junk, and are
     # asserted at the token level in test_cleaning.py.)
     for e in banks["term_bank"]:
-        assert e[5][0].lower() not in {"missing", "???"}  # keyword is never junk
+        # A full kanji entry's glossary is the single structured-content card;
+        # the keyword now lives in its hero header rather than a standalone
+        # leading gloss. Alias entries (variant forms) keep a short string
+        # gloss. Guard that whichever text surfaces is never a junk token.
+        detail = e[5][0]
+        if isinstance(detail, dict):
+            assert detail["type"] == "structured-content"
+            hero_kw = _hero_keyword_text(detail)
+            assert hero_kw.lower() not in {"missing", "???"}
+        else:
+            assert detail.lower() not in {"missing", "???"}
 
 
 def test_build_banks_is_pure_and_repeatable():

@@ -32,9 +32,12 @@ def test_term_entry_without_enrichment_matches_legacy_shape():
     r = rec("\u5834.json")  # 場
     entry = bk.build_term_entry(r)  # no enrichment arg -> unchanged
     assert entry[0] == "\u5834"
-    assert entry[5][0] == "location"  # keyword still first glossary item
-    detail = entry[5][1]
+    # The glossary is the single structured-content card only (no redundant
+    # standalone keyword gloss); the keyword lives in the hero header.
+    assert len(entry[5]) == 1
+    detail = entry[5][0]
     assert detail["type"] == "structured-content"
+    assert "location" in json.dumps(detail, ensure_ascii=False)
 
 
 def test_term_entry_embeds_donut_when_reading_counts_present():

@@ -1090,14 +1090,34 @@ def _top_reading_chip_row(record):
     }
 
 
+def _query_link(surface, content, lang="ja"):
+    """Wrap content in a supported internal Yomitan ``?query=`` link.
+
+    Yomitan structured content treats an ``<a>`` whose ``href`` begins with
+    ``?`` as an internal link, rewriting it to ``search.html?query=...`` and
+    wiring it through the content manager -- no custom JavaScript. The schema
+    forbids a ``data`` attribute on ``<a>``; Yomitan renders it as
+    ``a.gloss-link > span.gloss-link-text``, so styling hooks onto that
+    preserved class. The query targets the plain (annotation-free) surface.
+    """
+    return {
+        "tag": "a",
+        "href": "?query=" + urllib.parse.quote(surface, safe=""),
+        "lang": lang,
+        "content": content,
+    }
+
+
 def _global_vocab_grid(record):
     """Exactly the six globally highest-frequency words in a responsive grid.
 
     Uses ``record['global_words']`` (top six de-duplicated words by Jiten
-    frequency rank across all readings). Each cell carries the ruby surface plus
-    a concise gloss. The grid renders 3-left / 3-right on ordinary popups and a
-    single column on narrow popups (see styles.css). Returns None when the
-    record has no global words (KANJIDIC2-only entries).
+    frequency rank across all readings). Each cell carries the ruby surface --
+    wrapped in a supported internal Yomitan ``?query=`` link so a reader can
+    pivot to that word's own lookup with one click -- plus a concise gloss. The
+    grid renders 3-left / 3-right on ordinary popups and a single column on
+    narrow popups (see styles.css). Returns None when the record has no global
+    words (KANJIDIC2-only entries).
     """
     words = record.get("global_words") or []
     if not words:
@@ -1109,7 +1129,8 @@ def _global_vocab_grid(record):
             "data": {"beeRole": "vocab-item"},
             "content": [
                 {"tag": "span", "data": {"beeRole": "vocab-word"},
-                 "lang": "ja", "content": _ruby_node(ex["ruby"])},
+                 "lang": "ja",
+                 "content": _query_link(ex["surface"], _ruby_node(ex["ruby"]))},
                 {"tag": "span", "data": {"beeRole": "vocab-gloss"},
                  "content": " \u2014 " + ex["gloss"]},
             ],
@@ -1305,10 +1326,14 @@ def build_term_entry(record, enrichment=None):
     """Build one Yomitan term-bank entry for a normalized kanji record.
 
     `enrichment` (optional) threads the visual learning aids into the detail.
+
+    The glossary is the single structured-content card ONLY: the hero header
+    already names the keyword, so a leading plain-text gloss string would make
+    Yomitan paint the keyword twice (a redundant standalone line above the
+    card). A one-item structured-content glossary is the supported minimal
+    form and keeps the rich card the sole visible surface.
     """
-    keyword = record["keyword"] or record["character"]
     glossary = [
-        keyword,
         {"type": "structured-content", "content": _detail_content(record, enrichment)},
     ]
     return [

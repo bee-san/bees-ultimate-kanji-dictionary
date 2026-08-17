@@ -25,9 +25,13 @@ def test_term_bank_entry_shape_for_ba():
     assert entry[1] == ""            # reading (multi-reading kanji -> empty)
     assert entry[4] == 0             # neutral score
     glossary = entry[5]
-    assert glossary[0] == "location"  # first item is the recall keyword
-    detail = glossary[1]
+    # The glossary is the single structured-content rich card only -- the hero
+    # header names the keyword, so no redundant standalone gloss string leads it.
+    assert len(glossary) == 1
+    detail = glossary[0]
     assert detail["type"] == "structured-content"
+    # the keyword still appears, inside the hero header of the structured card
+    assert "location" in json.dumps(detail, ensure_ascii=False)
     assert entry[6] == ord("場")     # sequence = code point
 
 
