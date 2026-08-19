@@ -93,16 +93,15 @@ def test_fallback_banks_are_honest_no_freq_no_donut_no_enrichment():
     # no frequency meta for a rank-less fallback record
     assert bk.build_term_meta(rec) is None
     assert bk.build_kanji_meta(rec) is None
-    # term entry detail must not fabricate a distribution / percentages /
-    # enrichment, and must not claim Jiten attribution for data Jiten did not provide.
+    # term entry detail must not fabricate a donut / percentages / enrichment,
+    # and must not claim Jiten attribution for data Jiten did not provide.
     term = bk.build_term_entry(rec)
     blob = json.dumps(term, ensure_ascii=False)
-    assert "reading-distribution" not in blob
     assert "reading-donut" not in blob
     assert "%" not in blob
     assert "phonetic-family" not in blob
     assert "stroke-order" not in blob
-    assert bk.build_reading_distribution_node(rec) is None
+    assert bk.build_reading_chart_node(rec) is None
 
 
 # --- merge (Jiten wins, unique, valid, deterministic) -----------------------

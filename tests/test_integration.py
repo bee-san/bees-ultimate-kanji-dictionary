@@ -40,17 +40,13 @@ def test_term_entry_without_enrichment_matches_legacy_shape():
     assert "location" in json.dumps(detail, ensure_ascii=False)
 
 
-def test_term_entry_embeds_reading_distribution_when_reading_counts_present():
+def test_term_entry_embeds_donut_when_reading_counts_present():
     r = rec("\u751f.json")  # 生 has full wordsByReading group totals
     entry = bk.build_term_entry(r, enrichment=None)
     blob = json.dumps(entry, ensure_ascii=False)
-    # the distribution renders the truthful share of Jiten vocabulary entries by
-    # reading, computed over the complete group totals (denominator 3922), as a
-    # textual list -- no chart/graphic/image.
-    assert "reading-distribution" in blob
-    assert "reading-donut" not in blob
-    assert '"tag": "img"' not in blob
-    assert ".png" not in blob.lower()
+    # donut renders the truthful share of Jiten vocabulary entries by reading,
+    # computed over the complete group totals (denominator 3922), NOT examples
+    assert "reading-donut" in blob
     assert "%" in blob
     assert "Reading distribution" in blob
     assert "Counts distinct Jiten vocabulary" not in blob

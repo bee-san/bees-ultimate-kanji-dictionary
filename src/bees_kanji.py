@@ -400,7 +400,7 @@ def normalize_record(payload):
 # KANJIDIC2 (EDRDG) is the simple licensed fallback source for characters Jiten
 # does not serve. We use ONLY the fields it plainly provides -- English
 # meanings, Japanese on/kun/nanori readings, stroke count, grade, JLPT -- and
-# never manufacture examples, ranks, percentages, reading distributions,
+# never manufacture examples, ranks, percentages, donuts, phonetic families, or
 # Jiten attribution for data Jiten did not provide. Jiten stays authoritative
 # wherever it has a character; KANJIDIC2 only fills genuine gaps.
 
@@ -485,7 +485,7 @@ def kanjidic2_record(character, fields):
     builder works unchanged. Honest omissions: frequency_rank is None (Jiten's
     rank scale is not KANJIDIC2's newspaper-frequency and the two must not be
     conflated), and examples is empty (KANJIDIC2 supplies no example words), so
-    no frequency meta, reading distribution, or enrichment is ever
+    no frequency meta, reading-distribution donut, or enrichment is ever
     fabricated for these characters.
     """
     senses = clean_meanings(fields.get("meanings"))
@@ -527,10 +527,22 @@ def merge_kanjidic2(jiten_records, kanjidic2_index):
     return merged
 
 
-# --- Reading-distribution statistic ------------------------------------------
+# --- Reading-distribution pie chart ------------------------------------------
 
-# At most this many labelled reading segments; any tail collapses into "Other".
-MAX_READING_SEGMENTS = 5
+# At most this many labelled pie segments; any tail collapses into "Other".
+MAX_DONUT_SEGMENTS = 5
+
+# Accessible, colour-blind-distinguishable palette (Okabe-Ito derived). Order is
+# stable so identical inputs always produce identical colours.
+_DONUT_COLORS = [
+    "#0072b2",  # blue
+    "#d55e00",  # vermillion
+    "#009e73",  # green
+    "#cc79a7",  # reddish purple
+    "#e69f00",  # orange
+    "#767676",  # grey ("Other" / overflow)
+]
+_DONUT_OTHER_COLOR = "#767676"
 
 
 def _largest_remainder_percents(counts, total):
@@ -560,7 +572,7 @@ def reading_distribution(record):
     segment keeps its actual reading plus its On/Kun/Other class as secondary
     text. Segments are ordered by descending count, then normalized reading,
     then first source position (already the order of reading_entry_counts). At
-    most ``MAX_READING_SEGMENTS`` segments: the top readings plus one explicit
+    most ``MAX_DONUT_SEGMENTS`` segments: the top readings plus one explicit
     "Other" segment folding the remaining tail. Percentages are integers summing
     to exactly 100 via the largest-remainder method; the exact entry count rides
     alongside so a nonzero tiny group rendered as 0%% stays explicit.
@@ -575,9 +587,9 @@ def reading_distribution(record):
         return {"total": 0, "segments": []}
 
     # counts is already deterministically ordered (desc count, reading, source).
-    if len(counts) > MAX_READING_SEGMENTS:
-        head = counts[: MAX_READING_SEGMENTS - 1]
-        tail = counts[MAX_READING_SEGMENTS - 1:]
+    if len(counts) > MAX_DONUT_SEGMENTS:
+        head = counts[: MAX_DONUT_SEGMENTS - 1]
+        tail = counts[MAX_DONUT_SEGMENTS - 1:]
         kept = [(c["reading"], c["reading_class"], c["count"]) for c in head]
         overflow = sum(c["count"] for c in tail)
         kept.append(("", "Other", overflow))
@@ -589,19 +601,25 @@ def reading_distribution(record):
     seg_counts = [c for _, _, c in kept]
     percents = _largest_remainder_percents(seg_counts, total)
 
-    segments = [
-        {
+    segments = []
+    color_i = 0
+    for (reading, cls, cnt), pct in zip(kept, percents):
+        if cls == "Other" and reading == "":
+            color = _DONUT_OTHER_COLOR
+        else:
+            color = _DONUT_COLORS[color_i % (len(_DONUT_COLORS) - 1)]
+            color_i += 1
+        segments.append({
             "reading": reading,
             "reading_class": cls,
             "count": cnt,
             "percent": pct,
-        }
-        for (reading, cls, cnt), pct in zip(kept, percents)
-    ]
+            "color": color,
+        })
     return {"total": total, "segments": segments, "collapsed": collapsed}
 
 
-READING_DISTRIBUTION_TITLE = "Reading distribution"
+DONUT_TITLE = "Reading distribution"
 
 
 def _segment_label(segment):
@@ -613,56 +631,219 @@ def _segment_label(segment):
     return f"{reading} ({cls})"
 
 
-# --- Reading-distribution section (textual, no graphic) -----------------------
+# --- Per-entry raster reading-distribution chart (packaged PNG media) ---------
 
-# The reading distribution ships as TEXT only: a concise heading followed by a
-# clean list of reading labels and their truthful percentages (with the exact
-# entry count kept compactly). There is deliberately NO pie/donut, no packaged
-# PNG, no SVG/canvas/conic-gradient, and no colour swatch -- the numbers carry
-# the whole statistic, so it survives every renderer and theme with nothing to
-# load and no colour-only channel.
+# The compact card ships the reading distribution as a deterministic per-entry
+# PNG packaged as Yomitan dictionary media (referenced through a supported
+# structured-content <img>), rather than an inline CSS conic-gradient ring.
+# A raster image is what official Yomitan renders from an archive `path`, so it
+# survives every renderer / theme without relying on inline gradient support.
+
+# Fixed square canvas. 128px keeps the packaged bytes tiny while staying crisp
+# when the popup scales the image down to a few em.
+READING_CHART_SIZE = 128
+
+
+def _hex_to_rgba(hex_color, alpha=255):
+    """Convert a #rrggbb string to an (r, g, b, a) tuple."""
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+def reading_distribution_asset_name(character):
+    """Archive path for a character's packaged reading-distribution PNG.
+
+    Zero-padded lowercase hex code point under ``reading-distribution/`` so the
+    path is deterministic, collision-free, and independent of the glyph itself
+    (which may be filesystem-hostile).
+    """
+    return f"reading-distribution/{ord(character):05x}.png"
+
+
+def build_reading_distribution_png(record):
+    """Render the reading-distribution pie for a record as PNG bytes.
+
+    Deterministic: the same record always yields byte-identical output. Uses the
+    same truthful segment data as :func:`reading_distribution` (share of Jiten
+    vocabulary entries by reading), drawn as an anti-aliased pie on a
+    128x128 transparent canvas, then flattened to a compact fixed-palette
+    ("P"-mode) PNG with a single transparent index. Returns ``None`` when the
+    record has no valid positive Jiten reading total (e.g. KANJIDIC2-only
+    records), so the caller omits the chart rather than fabricating one.
+
+    The pie only ever uses the fixed Okabe-Ito segment palette on a
+    transparent field, so a paletted encoding represents it faithfully at a
+    fraction of the truecolor bytes -- keeping a release with thousands of
+    per-character charts a reasonable size without any performance framework.
+    Anti-aliased edge pixels are mapped to the nearest solid segment colour and
+    a 50%% alpha threshold decides transparency, which stays crisp and clearly
+    multi-segment at the few-em size the popup renders it.
+    """
+    from PIL import Image, ImageDraw
+
+    dist = reading_distribution(record)
+    if dist["total"] <= 0 or not dist["segments"]:
+        return None
+
+    # Supersample for smooth arc edges, then downsample to the target size.
+    scale = 4
+    size = READING_CHART_SIZE * scale
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    pad = int(size * 0.06)
+    box = [pad, pad, size - pad, size - pad]
+
+    # Draw wedges by cumulative percent. Start at -90 deg (12 o'clock) and go
+    # clockwise so the largest (first) segment leads from the top.
+    start = -90.0
+    for seg in dist["segments"]:
+        sweep = seg["percent"] * 3.6  # percent -> degrees
+        end = start + sweep
+        # A zero-percent (but nonzero-count) tail contributes no wedge; skip it
+        # so we never emit a degenerate arc.
+        if sweep > 0:
+            draw.pieslice(box, start, end, fill=_hex_to_rgba(seg["color"]))
+        start = end
+
+    img = img.resize((READING_CHART_SIZE, READING_CHART_SIZE), Image.LANCZOS)
+
+    return _flatten_to_palette_png(img)
+
+
+def _flatten_to_palette_png(rgba):
+    """Flatten an RGBA pie to a deterministic fixed-palette PNG (bytes).
+
+    Palette index 0 is the transparent field; the remaining indices are the
+    fixed Okabe-Ito segment colours (see ``_DONUT_COLORS``). Every opaque pixel
+    is snapped to its nearest segment colour; pixels below 50%% alpha become the
+    transparent index. The palette order is fixed, so identical inputs yield
+    byte-identical output.
+    """
+    from PIL import Image
+
+    palette_rgb = [(0, 0, 0)] + [
+        (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in _DONUT_COLORS
+    ]
+    solids = palette_rgb[1:]
+
+    out = Image.new("P", rgba.size, 0)
+    src = rgba.load()
+    dst = out.load()
+    nearest_cache = {}
+    for y in range(rgba.height):
+        for x in range(rgba.width):
+            r, g, b, a = src[x, y]
+            if a < 128:
+                dst[x, y] = 0
+                continue
+            key = (r, g, b)
+            idx = nearest_cache.get(key)
+            if idx is None:
+                best_i, best_d = 1, None
+                for i, (cr, cg, cb) in enumerate(solids):
+                    d = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2
+                    if best_d is None or d < best_d:
+                        best_d, best_i = d, i + 1
+                idx = nearest_cache[key] = best_i
+            dst[x, y] = idx
+
+    flat = []
+    for c in palette_rgb:
+        flat.extend(c)
+    flat.extend([0, 0, 0] * (256 - len(palette_rgb)))
+    out.putpalette(flat)
+
+    buf = io.BytesIO()
+    # Fixed PNG encoder options + no timestamp chunk => byte-deterministic.
+    out.save(buf, format="PNG", optimize=False, compress_level=9, transparency=0)
+    return buf.getvalue()
+
+
+def reading_chart_alt_text(record):
+    """Concise text equivalent of the reading-distribution chart (alt text)."""
+    dist = reading_distribution(record)
+    if dist["total"] <= 0:
+        return ""
+    parts = [
+        f"{_segment_label(s)} {s['percent']} percent"
+        for s in dist["segments"]
+    ]
+    return DONUT_TITLE + ": " + ", ".join(parts)
 
 
 def build_reading_distribution_node(record):
-    """Build the textual reading-distribution structured content.
+    """Build the packaged-PNG reading-distribution chart structured content.
 
-    A ``div`` section carrying a ``"Reading distribution"`` caption and a plain
-    text ``ul`` list. Each list item reads ``reading (Class): pct% (count
-    entries)`` using the truthful segment data from :func:`reading_distribution`
-    (share of Jiten vocabulary entries by reading). Returns ``None`` when the
-    record has no valid positive Jiten reading total (e.g. KANJIDIC2-only
-    records), so the caller omits the statistic rather than fabricating one.
+    The graphic is a single supported ``img`` referencing the packaged PNG by
+    its archive path; a caption and a visible text legend (colour swatch +
+    reading (class) + percent + exact entry count) carry the same data as real
+    text, so colour is never the sole channel and the chart degrades gracefully
+    when the image cannot load.
     """
     dist = reading_distribution(record)
-    if dist["total"] == 0 or not dist["segments"]:
+    if dist["total"] == 0:
         return None
     segments = dist["segments"]
+    alt = reading_chart_alt_text(record)
 
     caption = {
         "tag": "div",
-        "data": {"beeRole": "reading-dist-caption"},
-        "content": READING_DISTRIBUTION_TITLE,
+        "data": {"beeRole": "donut-caption"},
+        "content": DONUT_TITLE,
     }
 
-    list_items = [
-        {
-            "tag": "li",
-            "content": f"{_segment_label(s)}: {s['percent']}% ({s['count']:,} entries)",
+    image = {
+        "tag": "img",
+        "data": {"beeRole": "reading-chart"},
+        "path": reading_distribution_asset_name(record["character"]),
+        "width": 4.25,
+        "height": 4.25,
+        "sizeUnits": "em",
+        "alt": alt,
+        "title": alt,
+        "collapsible": False,
+        "collapsed": False,
+        "background": False,
+    }
+
+    legend_items = []
+    for s in segments:
+        swatch = {
+            "tag": "span",
+            "data": {"beeRole": "donut-swatch"},
+            "style": {"background": s["color"], "color": s["color"]},
+            "content": "\u25a0",  # filled square, visible even without CSS colour
         }
-        for s in segments
-    ]
-    listing = {
+        legend_items.append({
+            "tag": "li",
+            "content": [
+                swatch,
+                f"{_segment_label(s)}: {s['percent']}% ({s['count']:,} entries)",
+            ],
+        })
+    legend = {
         "tag": "ul",
-        "data": {"beeRole": "reading-dist-list"},
-        "content": list_items,
+        "data": {"beeRole": "donut-legend"},
+        "content": legend_items,
     }
 
     return {
         "tag": "div",
-        "data": {"beeRole": "reading-distribution"},
+        "data": {"beeRole": "reading-donut"},
         "lang": "en",
-        "content": [caption, listing],
+        "title": alt,
+        "content": [
+            caption,
+            {"tag": "div", "data": {"beeRole": "reading-pie"},
+             "content": [image]},
+            legend,
+        ],
     }
+
+
+# Compatibility for callers from the earlier packaged-chart implementation.
+build_reading_chart_node = build_reading_distribution_node
 
 
 # --- KanjiVG-sourced phonetic families ---------------------------------------
@@ -1108,8 +1289,8 @@ def _detail_content(record, enrichment=None):
       2. the TOP THREE readings by Jiten vocabulary-entry totals as plain chips
          (not split into On/Kun groups),
       3. a compact meaning line,
-      4. the reading distribution as a textual list of reading labels and
-         percentages (omitted, never faked, for KANJIDIC2-only records),
+      4. the reading-distribution chart as a packaged raster PNG (omitted, never
+         faked, for KANJIDIC2-only records) with alt text + a visible legend,
       5. exactly SIX globally highest-frequency de-duplicated words in a
          responsive two-column (3-left / 3-right) grid with ruby + gloss.
 
@@ -1148,11 +1329,11 @@ def _detail_content(record, enrichment=None):
             "content": "; ".join(record["senses"]),
         })
 
-    # 4. Reading distribution as a textual list of labels + percentages.
-    #    Omitted (never faked) when the record has no valid Jiten reading totals.
-    dist_node = build_reading_distribution_node(record)
-    if dist_node is not None:
-        body.append(dist_node)
+    # 4. Reading-distribution chart as a packaged raster PNG. Omitted (never
+    #    faked) when the record has no valid Jiten reading totals.
+    chart = build_reading_distribution_node(record)
+    if chart is not None:
+        body.append(chart)
 
     # 5. Exactly six globally highest-frequency words in a two-column grid.
     grid = _global_vocab_grid(record)
@@ -1546,14 +1727,16 @@ STYLES_CSS = """\
   }
 }
 
-/* Narrow / mobile-sized popups: stack the hero and chips, and collapse the
-   six-word vocabulary grid to a single column instead of overflowing a compact
-   pane. The textual reading distribution needs no special handling -- it wraps
-   naturally. */
+/* Narrow / mobile-sized popups: stack the hero, chips, and chart, and collapse
+   the six-word vocabulary grid to a single column instead of overflowing a
+   compact pane. The pie centres above a full-width legend. */
 @media (max-width: 24em) {
   [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
+  [data-sc-bee-role="reading-donut"] { justify-content: center; }
+  [data-sc-bee-role="reading-pie"] { flex-basis: 100%; text-align: center; margin: 0 0 0.35em; }
+  [data-sc-bee-role="donut-legend"] { flex-basis: 100%; }
 }
 
 /* Progressive disclosure: restrained, keyboard-focusable summaries with a
@@ -1580,13 +1763,25 @@ STYLES_CSS = """\
   border-radius: 0.15em;
 }
 
-/* Reading distribution: a concise heading followed by a plain textual list of
-   reading labels and their truthful percentages (with the exact entry count).
-   No graphic, no image, no colour swatch -- the numbers carry the statistic. */
-[data-sc-bee-role="reading-distribution"] {
+/* Reading-distribution chart: a packaged raster PNG pie plus a visible text
+   legend carrying the same data. The image is bounded and scoped; the caption
+   and legend degrade gracefully if the image cannot load.
+
+   IMPORTANT: real Yomitan renders a structured-content <img> as
+     a.gloss-image-link > span.gloss-image-container > canvas.gloss-image
+   and DISCARDS the data attributes on the <img> itself. So the chart cannot be
+   sized via its own data-sc marker -- we bound the PRESERVED .gloss-image-*
+   wrappers, scoped under our own reading-pie <div> (a div IS preserved with
+   its data-sc marker, unlike the img). */
+[data-sc-bee-role="reading-donut"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.2em 0.9em;
   margin: 0.5em 0;
 }
-[data-sc-bee-role="reading-dist-caption"] {
+[data-sc-bee-role="donut-caption"] {
+  flex-basis: 100%;
   font-size: 0.82em;
   font-weight: 700;
   letter-spacing: 0.03em;
@@ -1594,12 +1789,44 @@ STYLES_CSS = """\
   color: var(--bee-muted, currentColor);
   margin: 0 0 0.15em;
 }
-[data-sc-bee-role="reading-dist-list"] {
+[data-sc-bee-role="reading-pie"] {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+[data-sc-bee-role="reading-pie"] .gloss-image-link {
+  display: inline-block;
+  vertical-align: middle;
+}
+[data-sc-bee-role="reading-pie"] .gloss-image-container {
+  width: 4.25em;
+  max-width: 4.25em;
+  vertical-align: middle;
+}
+[data-sc-bee-role="donut-legend"] {
+  flex: 1 1 9em;
+  min-width: 8em;
   list-style: none;
   margin: 0;
   padding: 0;
+  vertical-align: middle;
   font-size: 0.86em;
   line-height: 1.55;
+}
+[data-sc-bee-role="donut-legend"] li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.1em;
+}
+[data-sc-bee-role="donut-swatch"] {
+  display: inline-block;
+  width: 0.72em;
+  height: 0.72em;
+  border-radius: 0.18em;
+  margin-right: 0.45em;
+  flex: 0 0 auto;
+  overflow: hidden;
+  vertical-align: middle;
 }
 
 /* Phonetic family line: quiet, wraps gracefully. */
@@ -1622,14 +1849,20 @@ STYLES_CSS = """\
 
 /* Forced colours (Windows High Contrast): the OS replaces our colours with its
    own system palette, and color-mix()/transparent borders can collapse to
-   nothing. Pin the card's separators, chips, badges, and focus rings to system
-   colour keywords so every element stays outlined and legible. */
+   nothing. Pin the card's separators, chips, badges, swatches, and focus rings
+   to system colour keywords so every element stays outlined and legible, and
+   force the legend swatches to print their assigned colour (the one place
+   colour still helps map a segment to its legend line). */
 @media (forced-colors: active) {
   [data-sc-bee-role="reading-chip"],
   [data-sc-bee-role="badge"] {
     border: 1px solid CanvasText;
   }
   [data-sc-bee-role="section"] { border-top-color: CanvasText; }
+  [data-sc-bee-role="donut-swatch"] {
+    border: 1px solid CanvasText;
+    forced-color-adjust: none;
+  }
   [data-sc-bee-role="vocab-word"] .gloss-link { color: LinkText; }
   [data-sc-bee-role="vocab-word"] .gloss-link:focus-visible,
   .gloss-link:focus-visible,
@@ -2230,6 +2463,15 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         present = [r["character"] for r in records]
         svgs = fetch_kanjivg_all(present, kanjivg_cache_dir, date, kanjivg_fetcher)
         enrichment = assemble_enrichment(svgs, ranks)
+
+    # Generate the per-entry reading-distribution PNG media for every record
+    # that carries a truthful Jiten reading total, and bundle each as a packaged
+    # asset the term card references by path. Records without a distribution
+    # (KANJIDIC2-only fallbacks) get no chart and no asset -- never faked.
+    for r in records:
+        png = build_reading_distribution_png(r)
+        if png is not None:
+            enrichment["assets"][reading_distribution_asset_name(r["character"])] = png
 
     banks = build_banks(records, aliases or {}, enrichment=enrichment)
     source_counts = {"jiten": jiten_count, "kanjidic2": kanjidic2_count}

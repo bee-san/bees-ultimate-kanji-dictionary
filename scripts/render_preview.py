@@ -3,9 +3,8 @@
 
 Mimics Yomitan's structured-content -> DOM transform (data keys become
 data-sc-* attributes) and applies the bundled styles.css, so the reading
-distribution, phonetic family, and stroke-order diagram can be verified in a real
-browser (normal, narrow/responsive, reduced-motion, and text-only accessibility
-views).
+distribution pie chart, phonetic family, and stroke-order diagram can be verified in a real
+(normal, narrow/responsive, reduced-motion, and text-only accessibility views).
 
 Usage: python scripts/render_preview.py <output.html> [char ...]
 Reads live KanjiVG (or the dated cache) + the local fixtures / Jiten cache.
@@ -82,9 +81,14 @@ def main():
                                 str(ROOT / "kanjivg-cache"), "2026-08-16")
     enr = bk.assemble_enrichment(svgs, ranks)
 
-    # Write assets next to the HTML so <img src="..."> resolves. The reading
-    # distribution is now plain text (no packaged chart media); the only assets
-    # are the KanjiVG stroke-order SVGs.
+    # Per-entry reading-distribution PNG charts (packaged as binary media).
+    for r in recs:
+        png = bk.build_reading_distribution_png(r)
+        if png is not None:
+            enr["assets"][bk.reading_distribution_asset_name(r["character"])] = png
+
+    # Write assets next to the HTML so <img src="..."> resolves. SVGs are text,
+    # reading-distribution charts are PNG bytes.
     for path, data in enr["assets"].items():
         p = out_path.parent / path
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +100,7 @@ def main():
     blocks = []
     for r in recs:
         entry = bk.build_term_entry(r, enr)
-        sc = entry[5][1]["content"]
+        sc = entry[5][0]["content"]
         blocks.append(
             f'<section class="entry"><h2>{html.escape(r["character"])} '
             f'&mdash; {html.escape(r["keyword"] or "")}</h2>'
@@ -118,7 +122,7 @@ h2 {{ margin-top: 0; }}
 <body>
 <h1>Enriched entry preview</h1>
 <p>Structured content rendered as Yomitan would, with the bundled
-<code>styles.css</code> applied. Verifies reading distribution, phonetic family,
+<code>styles.css</code> applied. Verifies reading pie chart, phonetic family,
 and animated stroke order with text fallbacks.</p>
 {''.join(blocks)}
 </body></html>"""

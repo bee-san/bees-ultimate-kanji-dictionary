@@ -70,12 +70,12 @@ def test_reading_chips_and_badges_wrap_for_narrow_popups():
 def test_dark_theme_adaptation_present_and_no_hardcoded_white_card():
     assert "prefers-color-scheme: dark" in CSS
     # the card never paints a solid white background; it inherits the viewer's
-    # theme. The reading distribution is plain text (no graphic to punch a hole).
+    # theme. The reading chart is a transparent PNG (no punched white hole).
     assert "#ffffff" not in CSS and "#fff;" not in CSS
     assert 'data-sc-bee-role="donut-hole"' not in CSS
 
 
-def test_narrow_media_query_present():
+def test_narrow_media_query_lets_donut_legend_stack():
     assert "@media (max-width:" in CSS
 
 

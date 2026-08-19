@@ -8,7 +8,7 @@ as a compact Yomitan-style popup card. Emits three standalone HTML pages that
 the screenshot step captures:
 
   1. compact.html    -- a normal entry with Learning aids collapsed
-  2. expanded.html   -- the same entry with Learning aids open (phonetic
+  2. expanded.html   -- the same entry with Learning aids open (pie chart, phonetic
                         family, stroke-order diagram)
   3. narrow.html     -- a reduced-motion / narrow-viewport static-fallback view
 
@@ -20,6 +20,7 @@ Usage: python scripts/render_screenshots.py <extracted-zip-dir> <out-dir> [char 
 import html
 import json
 import pathlib
+import shutil
 import sys
 
 
@@ -94,6 +95,22 @@ def _set_details_open(node, is_open):
     return n
 
 
+def _role_text(node, role):
+    """Return the first plain-text content carried by a structured role."""
+    if isinstance(node, list):
+        for item in node:
+            found = _role_text(item, role)
+            if found:
+                return found
+        return ""
+    if not isinstance(node, dict):
+        return ""
+    if (node.get("data") or {}).get("beeRole") == role:
+        content = node.get("content")
+        return content if isinstance(content, str) else ""
+    return _role_text(node.get("content"), role)
+
+
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -138,6 +155,12 @@ def main():
     chars = sys.argv[3:] or ["\u5834", "\u751f"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Keep packaged raster media at the same relative paths referenced by the
+    # structured content so browser screenshots exercise the exact ZIP bytes.
+    chart_media = zip_dir / "reading-distribution"
+    if chart_media.is_dir():
+        shutil.copytree(chart_media, out_dir / "reading-distribution", dirs_exist_ok=True)
+
     term_bank = json.loads((zip_dir / "term_bank_1.json").read_text(encoding="utf-8"))
     styles_css = (zip_dir / "styles.css").read_text(encoding="utf-8")
     by_char = {e[0]: e for e in term_bank}
@@ -151,8 +174,8 @@ def main():
 
     def card(char, is_open, width, page_bg, reduced_motion=False):
         entry = by_char[char]
-        keyword = entry[5][0]
-        sc = _set_details_open(entry[5][1]["content"], is_open)
+        sc = _set_details_open(entry[5][0]["content"], is_open)
+        keyword = _role_text(sc, "hero-keyword") or char
         css = styles_css
         if reduced_motion:
             # Emulate a client honouring prefers-reduced-motion: no animation.

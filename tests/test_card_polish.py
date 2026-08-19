@@ -181,16 +181,26 @@ def test_ruby_annotation_is_legible():
     assert float(m.group(1)) >= 0.6, "ruby annotation too small to read"
 
 
-def test_reading_distribution_list_is_readable_and_clean():
-    """The distribution is now a plain heading + text list. Its list rule must
-    strip the default bullets/indent and set a comfortable line-height so the
-    percentages read as a clean compact block, not a raw <ul>."""
-    listing = _rule('[data-sc-bee-role="reading-dist-list"]')
-    assert "list-style: none" in listing
-    assert "padding: 0" in listing
-    assert "line-height:" in listing
-    caption = _rule('[data-sc-bee-role="reading-dist-caption"]')
-    assert "font-weight:" in caption
+def test_chart_and_legend_share_a_balanced_layout():
+    """The donut graphic and its legend sit side by side on desktop with the
+    legend allowed to take the remaining space (a balanced two-part layout),
+    and the reading-donut base rule is a flex container to align them."""
+    # find the base reading-donut rule that actually sets `display` (there is
+    # also a narrow-media override, so match the block containing display).
+    import re
+    blocks = re.findall(
+        r'\[data-sc-bee-role="reading-donut"\]\s*\{([^}]*)\}', CSS
+    )
+    assert any("display: flex" in b or "display: grid" in b for b in blocks), (
+        "reading-donut must be a flex/grid container for a balanced chart+legend layout"
+    )
+    # the legend flexes to take remaining space (base rule, not narrow override)
+    legend_blocks = re.findall(
+        r'\[data-sc-bee-role="donut-legend"\]\s*\{([^}]*)\}', CSS
+    )
+    assert any("flex: 1" in b for b in legend_blocks), (
+        "donut-legend must flex to fill the remaining space beside the chart"
+    )
 
 
 def test_tokens_still_scoped_to_detail_wrapper():

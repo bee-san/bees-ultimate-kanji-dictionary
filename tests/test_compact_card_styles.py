@@ -1,9 +1,8 @@
-"""RED/GREEN: the compact card's responsive vocabulary grid + distribution CSS.
+"""RED/GREEN: the compact card's responsive vocabulary grid + chart CSS.
 
 The six global words render in a two-column grid (3 left / 3 right) on ordinary
-popups and collapse to a single column on narrow popups. The reading
-distribution is now plain text, so all obsolete chart/donut graphic CSS (the
-conic-gradient ring and the packaged-image wrappers) must be gone.
+popups and collapse to a single column on narrow popups. The reading chart is a
+packaged raster image, so the obsolete conic-gradient ring CSS must be gone.
 """
 import bees_kanji as bk
 
@@ -35,26 +34,24 @@ def test_obsolete_conic_gradient_ring_css_removed():
     assert 'data-sc-bee-role="donut-hole"' not in CSS
 
 
-def test_reading_distribution_is_styled_as_a_text_list():
-    # The distribution ships as a heading + plain <ul>; the CSS must style those
-    # roles and NOT any chart/graphic wrapper.
-    assert '[data-sc-bee-role="reading-distribution"]' in CSS
-    assert '[data-sc-bee-role="reading-dist-caption"]' in CSS
-    assert '[data-sc-bee-role="reading-dist-list"]' in CSS
-    listing = _rule('[data-sc-bee-role="reading-dist-list"]')
-    assert "list-style: none" in listing
+def test_chart_image_is_bounded_via_preserved_wrappers():
+    # Real Yomitan (structured-content-generator.js createDefinitionImage)
+    # DISCARDS the data attributes on an <img> node: the chart image is rendered
+    # as a.gloss-image-link > span.gloss-image-container > canvas.gloss-image,
+    # and none of those carry data-sc-bee-role. The pie is therefore bounded by
+    # targeting the preserved wrapper under our own retained reading-pie div.
+    selector = '[data-sc-bee-role="reading-pie"] .gloss-image-container'
+    assert selector in CSS, \
+        "chart size must target the preserved .gloss-image-container wrapper"
+    graphic = _rule(selector)
+    assert "width: 4.25em" in graphic
+    assert "max-width: 4.25em" in graphic
 
 
-def test_no_dead_image_or_graphic_selectors():
-    # No selectors keyed on the removed image / graphic / swatch machinery may
-    # linger -- they would be dead CSS for a card that no longer emits them.
-    for dead in ('[data-sc-bee-role="reading-chart"]',
-                 '[data-sc-bee-role="donut-graphic"]',
-                 '[data-sc-bee-role="donut-legend"]',
-                 '[data-sc-bee-role="donut-swatch"]',
-                 '[data-sc-bee-role="donut-caption"]',
-                 '[data-sc-bee-role="reading-donut"]'):
-        assert dead not in CSS, f"dead selector still present: {dead}"
+def test_no_dead_image_data_attribute_selectors():
+    # We must NOT ship selectors on the <img>'s own data attribute -- Yomitan
+    # discards those, so any rule keyed on the image data-sc marker is dead CSS.
+    assert '[data-sc-bee-role="reading-chart"]' not in CSS
 
 
 def test_dark_theme_still_present():
