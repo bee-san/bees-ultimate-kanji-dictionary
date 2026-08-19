@@ -132,9 +132,9 @@ def test_chart_node_has_concise_title_and_legend():
     for banned in ("usage frequency", "token frequency", "corpus", "probability",
                    "most used", "pronunciation", "real-world frequency", "chance"):
         assert banned not in scan, banned
-    # a visible textual legend with percentages and exact entry counts exists
+    # A visible textual legend keeps percentages while omitting raw counts.
     assert "%" in blob
-    assert "entries" in blob or "entry" in blob
+    assert "entries" not in blob and "entry" not in blob
     dist = bk.reading_distribution(r)
     for seg in dist["segments"]:
         if seg["reading"]:
@@ -146,14 +146,20 @@ def test_chart_node_has_concise_title_and_legend():
     assert bk.reading_distribution_asset_name("生") in blob
 
 
-def test_chart_legend_shows_reading_class_percent_and_count():
+def test_chart_legend_shows_reading_class_and_percent_only():
     r = rec("場.json")
     node = bk.build_reading_chart_node(r)
     blob = json.dumps(node, ensure_ascii=False)
-    # legend form: reading (class): percent% (count entries)
+    # Legend form: reading (class): percent%; raw counts are README-only semantics.
     assert "じょう" in blob and "(On)" in blob
     assert "58%" in blob
-    assert "2,904" in blob or "2904" in blob   # exact count shown beside percent
+    assert "2,904" not in blob and "2904" not in blob
+    assert "entries" not in blob and "entry" not in blob
+
+
+def test_readme_explains_distinct_jiten_vocabulary_semantics():
+    readme = (FIX.parent / "README.md").read_text(encoding="utf-8")
+    assert "distinct Jiten vocabulary" in readme
 
 
 def test_chart_node_absent_when_no_valid_totals():

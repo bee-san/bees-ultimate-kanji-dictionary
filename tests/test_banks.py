@@ -39,17 +39,17 @@ def test_term_detail_uses_full_jiten_reading_share_denominator():
     r = rec("場.json")
     entry = bk.build_term_entry(r)
     blob = json.dumps(entry, ensure_ascii=False)
-    # The raw Jiten KEY names must never leak, but the labelled reading-share
-    # statistic legitimately carries the normalized group counts as text.
+    # Raw Jiten key names and counts must never leak into the card.
     assert "totalWords" not in blob and "total_words" not in blob
     # The donut is a share of Jiten vocabulary ENTRIES computed over the full
     # group totals (denominator 4988), NOT the 1-2 shown example words.
     dist = bk.reading_distribution(r)
     assert dist["total"] == 4988
     assert sum(s["count"] for s in dist["segments"]) == 4988
-    # every visible legend line matches the honest full-payload count + percent
+    # Every percentage is visible, while raw counts stay out of the card.
     for seg in dist["segments"]:
-        assert f"{seg['percent']}% ({seg['count']:,} entries)" in blob
+        assert f"{seg['percent']}%" in blob
+        assert f"{seg['count']:,} entries" not in blob
     assert "Reading distribution" in blob
     assert "Counts distinct Jiten vocabulary" not in blob
 

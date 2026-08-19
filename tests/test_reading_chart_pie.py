@@ -50,5 +50,7 @@ def test_visible_text_legend_remains_the_accessible_source_of_truth():
     node = bk.build_reading_distribution_node(rec("場.json"))
     blob = json.dumps(node, ensure_ascii=False)
     assert "Reading distribution" in blob
-    assert "じょう (On): 58% (2,904 entries)" in blob
-    assert "ば (Kun): 42% (2,083 entries)" in blob
+    assert "じょう (On): 58%" in blob
+    assert "2,904 entries" not in blob
+    assert "ば (Kun): 42%" in blob
+    assert "2,083 entries" not in blob

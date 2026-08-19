@@ -777,7 +777,7 @@ def build_reading_distribution_node(record):
 
     The graphic is a single supported ``img`` referencing the packaged PNG by
     its archive path; a caption and a visible text legend (colour swatch +
-    reading (class) + percent + exact entry count) carry the same data as real
+    reading (class) + percent) carry the same data as real
     text, so colour is never the sole channel and the chart degrades gracefully
     when the image cannot load.
     """
@@ -819,7 +819,7 @@ def build_reading_distribution_node(record):
             "tag": "li",
             "content": [
                 swatch,
-                f"{_segment_label(s)}: {s['percent']}% ({s['count']:,} entries)",
+                f"{_segment_label(s)}: {s['percent']}%",
             ],
         })
     legend = {

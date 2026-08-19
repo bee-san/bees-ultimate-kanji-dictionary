@@ -20,7 +20,7 @@ full visual acceptance inventory lives in
 
 | Enriched entry (生) | Expanded details (生) | Narrow entry (場) |
 | :---: | :---: | :---: |
-| ![Real Yomitan search result for the kanji 生, showing the keyword "life", top reading chips, meanings, the coloured reading-share pie chart with its legend and entry counts, and common vocabulary.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry with its secondary reading, metadata, and vocabulary disclosures expanded below the visible reading-share pie chart.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 300px card, showing a compact reading-share pie chart and legend above vocabulary, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
+| ![Real Yomitan search result for the kanji 生, showing the keyword "life", top reading chips, meanings, the coloured reading-share pie chart with its percentage legend, and common vocabulary.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry with its secondary reading, metadata, and vocabulary disclosures expanded below the visible reading-share pie chart.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 300px card, showing a compact reading-share pie chart and legend above vocabulary, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
 
 The KANJIDIC2 fallback is deliberately plain — no invented pie chart, ranks, or
 examples:
@@ -39,8 +39,9 @@ examples:
 - Jiten meanings, on/kun readings, frequency ranks, and common vocabulary
   examples grouped by reading (On / Kun / Other), chosen by Jiten rank and
   rendered with furigana.
-- A **reading distribution** pie chart using Jiten's complete per-reading entry
-  counts, with a visible legend and exact counts.
+- A **reading distribution** pie chart with a visible percentage legend. Each
+  percentage is calculated from distinct Jiten vocabulary entries for that
+  reading; the raw counts stay out of the card to keep it clean.
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
