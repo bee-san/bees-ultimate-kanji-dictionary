@@ -44,7 +44,7 @@ examples:
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
-- Static **KanjiVG** stroke-order diagrams (high-contrast and motion-free, with
+- Static KanjiVG stroke-order diagrams (high-contrast and motion-free, with
   text fallback) and source-marked phonetic families.
 - Accessible, compact CSS scoped to this dictionary's own markers; keyboard and
   screen-reader friendly.
