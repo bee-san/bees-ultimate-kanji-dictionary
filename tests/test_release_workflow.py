@@ -76,12 +76,18 @@ def test_every_checkout_restores_a_credential_free_public_origin():
     workflow = _workflow()
     checkout_count = workflow.count("actions/checkout@")
     configure_count = workflow.count("Configure credential-free public origin")
-    public_url = 'git config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"'
+    safe_directory = 'git config --global --add safe.directory "$GITHUB_WORKSPACE"'
+    public_url = (
+        'git -C "$GITHUB_WORKSPACE" config remote.origin.url '
+        '"https://github.com/${GITHUB_REPOSITORY}.git"'
+    )
     fetch_refspec = (
-        'git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"'
+        'git -C "$GITHUB_WORKSPACE" config remote.origin.fetch '
+        '"+refs/heads/*:refs/remotes/origin/*"'
     )
     assert checkout_count == 4
     assert configure_count == checkout_count
+    assert workflow.count(safe_directory) >= checkout_count
     assert workflow.count(public_url) == checkout_count
     assert workflow.count(fetch_refspec) == checkout_count
     first_checkout = workflow.index("actions/checkout@")
