@@ -157,9 +157,9 @@ def main():
 
     # Keep packaged raster media at the same relative paths referenced by the
     # structured content so browser screenshots exercise the exact ZIP bytes.
-    chart_media = zip_dir / "reading-distribution"
+    chart_media = zip_dir / "reading-frequency"
     if chart_media.is_dir():
-        shutil.copytree(chart_media, out_dir / "reading-distribution", dirs_exist_ok=True)
+        shutil.copytree(chart_media, out_dir / "reading-frequency", dirs_exist_ok=True)
 
     term_bank = json.loads((zip_dir / "term_bank_1.json").read_text(encoding="utf-8"))
     styles_css = (zip_dir / "styles.css").read_text(encoding="utf-8")

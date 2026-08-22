@@ -2,7 +2,14 @@
 /cache/
 /kanjivg-cache/
 /kanjidic2-cache/
+/jiten-frequency-cache/
 /build/
+/replay-build/
+/replay-dist/
+/replay-source/
+/baseline-dist/
+/container-build/
+/container-dist/
 /out/
 *.zip
 SHA256SUMS

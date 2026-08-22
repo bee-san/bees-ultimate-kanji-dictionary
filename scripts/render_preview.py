@@ -16,7 +16,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-import bees_kanji as bk  # noqa: E402
+import bees_kanji as bk
 
 
 def _kebab(key):
@@ -81,14 +81,8 @@ def main():
                                 str(ROOT / "kanjivg-cache"), "2026-08-16")
     enr = bk.assemble_enrichment(svgs, ranks)
 
-    # Per-entry reading-distribution PNG charts (packaged as binary media).
-    for r in recs:
-        png = bk.build_reading_distribution_png(r)
-        if png is not None:
-            enr["assets"][bk.reading_distribution_asset_name(r["character"])] = png
-
     # Write assets next to the HTML so <img src="..."> resolves. SVGs are text,
-    # reading-distribution charts are PNG bytes.
+    # while production Frequency weight charts require the validated bulk build.
     for path, data in enr["assets"].items():
         p = out_path.parent / path
         p.parent.mkdir(parents=True, exist_ok=True)

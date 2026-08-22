@@ -8,6 +8,7 @@ import json
 import pathlib
 
 import jsonschema
+
 import bees_kanji as bk
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent

@@ -8,14 +8,14 @@ licence/attribution, and only the needed SVG assets -- still one ZIP, still
 byte-deterministic.
 """
 import io
-import json
 import zipfile
+
+import pytest
 
 import bees_kanji as bk
 
 
 def _fake_kvg(character):
-    cp = ord(character)
     # two chars share phonetic 寺; one has none.
     phon = {"\u6642": "\u5bfa", "\u6301": "\u5bfa"}.get(character)
     phon_attr = f' kvg:phon="{phon}"' if phon else ""
@@ -56,6 +56,46 @@ def test_fetch_kanjivg_negatively_caches_daily_404(tmp_path):
     assert calls == ["\u9ad9"]
 
 
+def test_fetch_kanjivg_prefers_a_valid_positive_cache_over_stale_negative_marker(tmp_path):
+    date = "2026-08-19"
+    day = tmp_path / date
+    day.mkdir()
+    path = day / bk.kanjivg_cache_filename("丐")
+    expected = _fake_kvg("丐")
+    path.write_text(expected, encoding="utf-8")
+    missing = path.with_suffix(".missing")
+    missing.touch()
+
+    def should_not_fetch(_character):
+        raise AssertionError("a valid positive cache entry must win")
+
+    assert bk.fetch_kanjivg_all(["丐"], tmp_path, date, should_not_fetch) == {
+        "丐": expected
+    }
+    assert not missing.exists()
+
+
+def test_invalid_positive_kanjivg_cache_does_not_override_stale_negative_marker(tmp_path):
+    date = "2026-08-19"
+    day = tmp_path / date
+    day.mkdir()
+    path = day / bk.kanjivg_cache_filename("丐")
+    path.write_text("not an svg", encoding="utf-8")
+    missing = path.with_suffix(".missing")
+    missing.touch()
+    calls = []
+
+    def fetcher(character):
+        calls.append(character)
+        return _fake_kvg(character)
+
+    result = bk.fetch_kanjivg_all(["丐"], tmp_path, date, fetcher)
+    assert result == {"丐": _fake_kvg("丐")}
+    assert calls == ["丐"]
+    assert not missing.exists()
+    assert bk.parse_kanjivg(path.read_text(encoding="utf-8"), "丐") is not None
+
+
 def test_assemble_enrichment_builds_strokes_phonetics_and_assets():
     svgs = {c: _fake_kvg(c) for c in ["\u6642", "\u6301", "\u751f"]}
     ranks = {"\u6642": 200, "\u6301": 400}
@@ -68,6 +108,26 @@ def test_assemble_enrichment_builds_strokes_phonetics_and_assets():
     # only referenced SVG assets are produced, sanitized (no kvg:)
     assert "kanjivg/06642.svg" in enr["assets"]
     assert "kvg:" not in enr["assets"]["kanjivg/06642.svg"]
+
+
+def test_production_kanjivg_coverage_floor_rejects_a_partial_negative_cache(tmp_path):
+    date = "2026-08-19"
+    day = tmp_path / date
+    day.mkdir()
+    (day / "04e00.missing").touch()
+    (day / "04e01.missing").touch()
+    positive = day / "04e02.svg"
+    positive.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(bk.MalformedPayload, match="KanjiVG coverage floor"):
+        bk.validate_kanjivg_coverage(
+            bk.MIN_KANJIVG_STROKE_SETS - 1,
+            cache_dir=tmp_path,
+            date=date,
+        )
+    assert list(day.glob("*.missing")) == []
+    assert positive.read_text(encoding="utf-8") == "keep"
+    bk.validate_kanjivg_coverage(bk.MIN_KANJIVG_STROKE_SETS)
 
 
 def test_zip_bundles_styles_kanjivg_license_and_assets():

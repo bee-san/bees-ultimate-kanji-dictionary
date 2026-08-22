@@ -4,16 +4,24 @@ One module owns the whole pipeline: fetch -> normalize -> validate -> build.
 Kept small and understandable on purpose. No service layers, no plugins.
 """
 
+import csv
+import functools
 import hashlib
+import importlib.metadata
 import io
 import json
+import math
 import pathlib
 import re
+import stat
+import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+from dataclasses import dataclass
 
 # --- Reading normalization ---------------------------------------------------
 
@@ -358,6 +366,517 @@ def _reading_entry_counts(payload, on, kun):
     ]
 
 
+# --- Jiten bulk rank -> per-reading frequency weights -----------------------
+
+JITEN_FREQUENCY_CSV_URL = (
+    "https://api.jiten.moe/api/frequency-list/download?downloadType=csv"
+)
+JITEN_FREQUENCY_ASSET_NAME = "jiten-global-frequency.csv"
+MAX_JITEN_FREQUENCY_BYTES = 64 * 1024 * 1024
+MAX_JITEN_FREQUENCY_RANK = 10_000_000
+MAX_JITEN_FREQUENCY_ROWS = 600_000
+MAX_JITEN_FREQUENCY_SURFACE_LENGTH = 128
+MAX_JITEN_FREQUENCY_READING_LENGTH = 256
+FREQUENCY_TAIL_START = 100_000
+
+
+def _normalize_frequency_text(text):
+    """Normalize a bulk-list surface/reading without dropping okurigana."""
+    if not isinstance(text, str):
+        return ""
+    return _katakana_to_hiragana(unicodedata.normalize("NFKC", text).strip())
+
+
+def parse_jiten_frequency_csv_with_stats(text):
+    """Parse and conservatively deduplicate Jiten's Global frequency CSV.
+
+    Exact duplicate triples collapse to one row. If the same ``(Word, Form)``
+    pair has conflicting ranks, every row for that pair is excluded because the
+    export does not carry a lossless word-form identity with which to resolve it.
+    """
+    if not isinstance(text, str):
+        raise MalformedPayload("Jiten frequency CSV is not text")
+    try:
+        reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    except csv.Error as exc:
+        raise MalformedPayload("Jiten frequency CSV cannot be parsed") from exc
+    if reader.fieldnames != ["Word", "Form", "Rank"]:
+        raise MalformedPayload("Jiten frequency CSV header must be Word,Form,Rank")
+
+    unique_rows = []
+    seen_triples = set()
+    pair_ranks = {}
+    source_rows = 0
+    exact_duplicates = 0
+    try:
+        for row_number, source_row in enumerate(reader, 1):
+            if row_number > MAX_JITEN_FREQUENCY_ROWS:
+                raise MalformedPayload("Jiten frequency CSV exceeds the row limit")
+            source_rows += 1
+            if None in source_row or any(value is None for value in source_row.values()):
+                raise MalformedPayload("Jiten frequency CSV contains a malformed row")
+            surface = source_row.get("Word")
+            reading = source_row.get("Form")
+            raw_rank = source_row.get("Rank")
+            if not isinstance(surface, str) or not surface.strip():
+                raise MalformedPayload("Jiten frequency CSV contains an empty Word")
+            if not isinstance(reading, str) or not reading.strip():
+                raise MalformedPayload("Jiten frequency CSV contains an empty Form")
+            surface = unicodedata.normalize("NFKC", surface.strip())
+            reading = _normalize_frequency_text(reading)
+            if not surface or not reading:
+                raise MalformedPayload("Jiten frequency CSV contains an empty normalized form")
+            if len(surface) > MAX_JITEN_FREQUENCY_SURFACE_LENGTH:
+                raise MalformedPayload("Jiten frequency CSV Word exceeds the length limit")
+            if len(reading) > MAX_JITEN_FREQUENCY_READING_LENGTH:
+                raise MalformedPayload("Jiten frequency CSV Form exceeds the length limit")
+            if not isinstance(raw_rank, str) or re.fullmatch(r"[1-9][0-9]*", raw_rank) is None:
+                raise MalformedPayload("Jiten frequency CSV contains an invalid Rank")
+            rank = int(raw_rank)
+            if rank <= 0 or rank > MAX_JITEN_FREQUENCY_RANK:
+                raise MalformedPayload("Jiten frequency CSV Rank is outside the accepted range")
+            row = (surface, reading, rank)
+            if row in seen_triples:
+                exact_duplicates += 1
+                continue
+            seen_triples.add(row)
+            unique_rows.append(row)
+            pair_ranks.setdefault((surface, reading), set()).add(rank)
+    except csv.Error as exc:
+        raise MalformedPayload("Jiten frequency CSV contains malformed quoting") from exc
+
+    conflicting_pairs = {
+        pair for pair, ranks in pair_ranks.items() if len(ranks) > 1
+    }
+    excluded_conflicting_rows = sum(
+        1 for surface, reading, _rank in unique_rows
+        if (surface, reading) in conflicting_pairs
+    )
+    rows = [
+        row for row in unique_rows
+        if (row[0], row[1]) not in conflicting_pairs
+    ]
+    if not rows:
+        raise MalformedPayload("Jiten frequency CSV contains no unambiguous rows")
+    stats = {
+        "sourceRows": source_rows,
+        "exactDuplicateRows": exact_duplicates,
+        "conflictingSurfaceReadingPairs": len(conflicting_pairs),
+        "excludedConflictingRows": excluded_conflicting_rows,
+        "rows": len(rows),
+    }
+    return rows, stats
+
+
+def parse_jiten_frequency_csv(text):
+    """Return strictly parsed, conflict-free Global frequency rows."""
+    return parse_jiten_frequency_csv_with_stats(text)[0]
+
+
+@functools.lru_cache(maxsize=8192)
+def _normalized_frequency_options(options):
+    return tuple(sorted({
+        normalized
+        for option in options
+        if (normalized := _normalize_frequency_text(option))
+    }, key=lambda value: (-len(value), value)))
+
+
+def _is_frequency_kana(character):
+    code = ord(character)
+    return (
+        0x3040 <= code <= 0x309F
+        or 0x30A0 <= code <= 0x30FF
+        or character == "ー"
+    )
+
+
+def _is_han_character(character):
+    """Return whether a Han ideograph must be aligned rather than anchored."""
+    code = ord(character)
+    return (
+        0x2E80 <= code <= 0x2EFF  # CJK radicals supplement
+        or 0x2F00 <= code <= 0x2FDF  # Kangxi radicals
+        or code in {0x3005, 0x3007}  # iteration mark and ideographic zero
+        or 0x3021 <= code <= 0x3029  # Hangzhou numerals
+        or 0x3038 <= code <= 0x303B  # ideographic numerals/iteration marks
+        or 0x31C0 <= code <= 0x31EF  # CJK strokes
+        or 0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x16FE2 <= code <= 0x16FE3  # ideographic marks
+        or 0x16FF0 <= code <= 0x16FF1  # ideographic reading marks
+        or 0x20000 <= code <= 0x2EE5F  # CJK Extensions B through I
+        or 0x2F800 <= code <= 0x2FA1F  # compatibility supplement
+        or 0x30000 <= code <= 0x3347F  # CJK Extensions G through J
+        or character in {"々", "〆"}
+    )
+
+
+_RENDAKU = dict(zip(
+    "かきくけこさしすせそたちつてとはひふへほ",
+    "がぎぐげござじずぜぞだぢづでどばびぶべぼ",
+))
+_HANDAKUTEN = dict(zip("はひふへほ", "ぱぴぷぺぽ"))
+
+
+def _kanjidic_compositional_options(payload, allowed_labels):
+    """Port Jiten's KANJIDIC candidate inventory for multi-kanji runs."""
+    readings = []
+    for raw in payload.get("onReadings") or []:
+        if not isinstance(raw, str):
+            continue
+        clean = "".join(
+            character for character in unicodedata.normalize("NFKC", raw)
+            if _is_frequency_kana(character) or character == "."
+        )
+        candidate = _katakana_to_hiragana(clean).replace(".", "")
+        if candidate:
+            readings.append(candidate)
+    for raw in payload.get("kunReadings") or []:
+        if not isinstance(raw, str):
+            continue
+        clean = "".join(
+            character for character in unicodedata.normalize("NFKC", raw)
+            if _is_frequency_kana(character) or character == "."
+        )
+        stem = _katakana_to_hiragana(clean).split(".", 1)[0]
+        if stem:
+            readings.append(stem)
+
+    distinct = list(dict.fromkeys(readings))
+    variants = []
+    for reading in distinct:
+        if reading[0] in _RENDAKU:
+            variants.append(_RENDAKU[reading[0]] + reading[1:])
+        if reading[0] in _HANDAKUTEN:
+            variants.append(_HANDAKUTEN[reading[0]] + reading[1:])
+        if len(reading) >= 2 and reading[-1] in "くきちつ":
+            variants.append(reading[:-1] + "っ")
+    allowed = set(allowed_labels)
+    return _normalized_frequency_options(tuple(
+        reading for reading in dict.fromkeys(distinct + variants)
+        if reading in allowed
+    ))
+
+
+def _frequency_surface_tokens(surface, normalized_options):
+    tokens = []
+    previous_kanji = None
+    for surface_index, character in enumerate(surface):
+        if character in normalized_options:
+            tokens.append((surface_index, character, None))
+            previous_kanji = character
+        elif character == "々" and previous_kanji in normalized_options:
+            tokens.append((surface_index, previous_kanji, None))
+        elif _is_han_character(character):
+            # An unknown Han glyph makes this segmentation incomplete. It must
+            # never consume a mixed-script Form character as a literal anchor.
+            return None
+        else:
+            tokens.append((surface_index, None, _normalize_frequency_text(character)))
+            previous_kanji = None
+    return tokens
+
+
+def _align_frequency_form_normalized(
+    surface, full_reading, normalized_options, compositional_options=None
+):
+    """Align one form, using KANJIDIC candidates inside multi-kanji runs."""
+    surface = unicodedata.normalize("NFKC", surface) if isinstance(surface, str) else ""
+    reading = _normalize_frequency_text(full_reading)
+    if not surface or not reading:
+        return None
+
+    tokens = _frequency_surface_tokens(surface, normalized_options)
+    if tokens is None:
+        return None
+    run_lengths = [0] * len(tokens)
+    start = 0
+    while start < len(tokens):
+        if tokens[start][1] is None:
+            start += 1
+            continue
+        end = start
+        while end < len(tokens) and tokens[end][1] is not None:
+            end += 1
+        for index in range(start, end):
+            run_lengths[index] = end - start
+        start = end
+
+    # (reading offset, assignments). A cap keeps adversarial ambiguity bounded;
+    # anything beyond it is omitted rather than guessed.
+    states = {(0, ())}
+    for token_index, (surface_index, source_character, literal) in enumerate(tokens):
+        next_states = set()
+        for reading_index, assignments in states:
+            if source_character is not None:
+                inventory = normalized_options
+                if run_lengths[token_index] > 1 and compositional_options is not None:
+                    inventory = compositional_options
+                for option in inventory.get(source_character, ()):
+                    if reading.startswith(option, reading_index):
+                        next_states.add((
+                            reading_index + len(option),
+                            assignments + ((surface_index, source_character, option),),
+                        ))
+            elif literal and reading.startswith(literal, reading_index):
+                next_states.add((reading_index + len(literal), assignments))
+            if len(next_states) > 64:
+                return None
+        if not next_states:
+            return None
+        states = next_states
+
+    solutions = {
+        assignments for reading_index, assignments in states
+        if reading_index == len(reading)
+    }
+    return next(iter(solutions)) if len(solutions) == 1 else None
+
+
+def align_frequency_form(
+    surface, full_reading, reading_options, compositional_options=None
+):
+    """Return one complete per-kanji reading alignment, else ``None``.
+
+    Curated endpoint group labels are accepted for isolated kanji runs. A caller
+    can supply Jiten/KANJIDIC-derived ``compositional_options`` for compounds;
+    rows with no complete solution or multiple segmentations are omitted.
+    """
+    normalized_options = {}
+    normalized_compositional = {}
+    surface_characters = set(surface) if isinstance(surface, str) else set()
+    for character in surface_characters:
+        options = reading_options.get(character)
+        if options:
+            normalized_options[character] = _normalized_frequency_options(tuple(options))
+        if compositional_options is not None:
+            compound = compositional_options.get(character)
+            if compound:
+                normalized_compositional[character] = _normalized_frequency_options(
+                    tuple(compound)
+                )
+    return _align_frequency_form_normalized(
+        surface,
+        full_reading,
+        normalized_options,
+        normalized_compositional if compositional_options is not None else None,
+    )
+
+
+def rank_frequency_weight(rank):
+    """Convert a Jiten global ordinal rank into a finite importance weight.
+
+    This is deliberately a *rank-derived weight*, not an occurrence estimate:
+    inverse square root keeps the high-frequency head useful without letting the
+    first few terms consume the chart, and a quadratic multiplier suppresses the
+    unverifiable long tail beyond rank 100,000.
+    """
+    if isinstance(rank, bool) or not isinstance(rank, int):
+        return 0.0
+    if rank <= 0 or rank > MAX_JITEN_FREQUENCY_RANK:
+        return 0.0
+    try:
+        weight = 1.0 / math.sqrt(rank)
+        if rank > FREQUENCY_TAIL_START:
+            weight *= (FREQUENCY_TAIL_START / rank) ** 2
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return 0.0
+    return weight if math.isfinite(weight) and weight > 0 else 0.0
+
+
+def _calculate_reading_frequency_scores_with_stats(payloads, rows):
+    """Join bulk ranked forms to Jiten reading groups without per-word calls."""
+    options = {}
+    compositional_options = {}
+    orders = {}
+    for character, payload in payloads.items():
+        if not isinstance(payload, dict):
+            continue
+        order = []
+        for group in payload.get("wordsByReading") or []:
+            if not isinstance(group, dict):
+                continue
+            reading = normalize_reading(group.get("reading"))
+            if reading and reading not in order:
+                order.append(reading)
+        if order:
+            options[character] = tuple(order)
+            compound = _kanjidic_compositional_options(payload, order)
+            if compound:
+                compositional_options[character] = compound
+            orders[character] = order
+
+    values = {}
+    stats = {
+        "rows": len(rows),
+        "relevantRows": 0,
+        "alignedRows": 0,
+        "ambiguousOrUnalignedRows": 0,
+        "readingAssignments": 0,
+        "relevantRankWeight": 0.0,
+        "alignedRankWeight": 0.0,
+    }
+    for surface, full_reading, rank in rows:
+        if not any(character in options for character in surface):
+            continue
+        stats["relevantRows"] += 1
+        weight = rank_frequency_weight(rank)
+        if weight <= 0:
+            continue
+        stats["relevantRankWeight"] += weight
+        alignment = _align_frequency_form_normalized(
+            surface, full_reading, options, compositional_options
+        )
+        if alignment is None:
+            stats["ambiguousOrUnalignedRows"] += 1
+            continue
+        stats["alignedRows"] += 1
+        stats["alignedRankWeight"] += weight
+        assignments = {(character, reading) for _, character, reading in alignment}
+        stats["readingAssignments"] += len(assignments)
+        for character, reading in assignments:
+            values.setdefault((character, reading), []).append(weight)
+
+    result = {}
+    for character, order in orders.items():
+        payload = payloads[character]
+        on = clean_strings(payload.get("onReadings"))
+        kun = clean_strings(payload.get("kunReadings"))
+        items = []
+        for reading in order:
+            weights = values.get((character, reading))
+            if not weights:
+                continue
+            score = math.fsum(weights)
+            if not math.isfinite(score) or score <= 0:
+                continue
+            items.append({
+                "reading": reading,
+                "score": score,
+                "reading_class": classify_reading(reading, on, kun),
+            })
+        if items:
+            result[character] = items
+    stats["charactersWithScores"] = len(result)
+    stats["readingGroupsWithScores"] = sum(len(items) for items in result.values())
+    relevant_weight = stats["relevantRankWeight"]
+    stats["rankWeightCoverage"] = (
+        stats["alignedRankWeight"] / relevant_weight if relevant_weight > 0 else 0.0
+    )
+    return result, stats
+
+
+def calculate_reading_frequency_scores(payloads, rows):
+    """Public pure helper returning per-character rank-derived scores."""
+    return _calculate_reading_frequency_scores_with_stats(payloads, rows)[0]
+
+
+MIN_JITEN_FREQUENCY_ROWS = 400_000
+MIN_JITEN_FREQUENCY_RELEVANT_ROWS = 250_000
+MIN_JITEN_FREQUENCY_ALIGNED_ROWS = 180_000
+MIN_JITEN_FREQUENCY_WEIGHT_COVERAGE = 0.85
+MIN_JITEN_FREQUENCY_CHARACTERS = 3_500
+
+
+def validate_jiten_frequency_coverage(stats):
+    """Fail closed on partial, impossible, or internally inconsistent metrics."""
+    requirements = (
+        ("rows", MIN_JITEN_FREQUENCY_ROWS),
+        ("relevantRows", MIN_JITEN_FREQUENCY_RELEVANT_ROWS),
+        ("alignedRows", MIN_JITEN_FREQUENCY_ALIGNED_ROWS),
+        ("charactersWithScores", MIN_JITEN_FREQUENCY_CHARACTERS),
+    )
+    for key, minimum in requirements:
+        value = stats.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise MalformedPayload(
+                f"Jiten frequency coverage floor failed: {key}={value!r} < {minimum}"
+            )
+
+    source_rows = stats.get("sourceRows")
+    exact_duplicates = stats.get("exactDuplicateRows")
+    conflicting_pairs = stats.get("conflictingSurfaceReadingPairs")
+    excluded_conflicts = stats.get("excludedConflictingRows")
+    parser_counts = (
+        source_rows,
+        exact_duplicates,
+        conflicting_pairs,
+        excluded_conflicts,
+    )
+    if any(
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
+        for value in parser_counts
+    ):
+        raise MalformedPayload("Jiten frequency parser statistics are inconsistent")
+
+    rows = stats["rows"]
+    relevant = stats["relevantRows"]
+    aligned = stats["alignedRows"]
+    if (
+        source_rows > MAX_JITEN_FREQUENCY_ROWS
+        or source_rows != rows + exact_duplicates + excluded_conflicts
+        or excluded_conflicts < 2 * conflicting_pairs
+        or (conflicting_pairs == 0) != (excluded_conflicts == 0)
+    ):
+        raise MalformedPayload("Jiten frequency source-row accounting is inconsistent")
+
+    ambiguous = stats.get("ambiguousOrUnalignedRows")
+    assignments = stats.get("readingAssignments")
+    if not (
+        0 <= aligned <= relevant <= rows <= MAX_JITEN_FREQUENCY_ROWS
+        and isinstance(ambiguous, int)
+        and not isinstance(ambiguous, bool)
+        and ambiguous == relevant - aligned
+        and isinstance(assignments, int)
+        and not isinstance(assignments, bool)
+        and assignments >= aligned
+    ):
+        raise MalformedPayload("Jiten frequency coverage statistics are inconsistent")
+
+    characters = stats.get("charactersWithScores")
+    groups = stats.get("readingGroupsWithScores")
+    if not (
+        isinstance(characters, int)
+        and not isinstance(characters, bool)
+        and isinstance(groups, int)
+        and not isinstance(groups, bool)
+        and 0 < characters <= groups <= assignments <= aligned * MAX_JITEN_FREQUENCY_SURFACE_LENGTH
+    ):
+        raise MalformedPayload("Jiten frequency assignment statistics are inconsistent")
+
+    coverage = stats.get("rankWeightCoverage")
+    if (
+        isinstance(coverage, bool)
+        or not isinstance(coverage, (int, float))
+        or not math.isfinite(coverage)
+        or coverage < MIN_JITEN_FREQUENCY_WEIGHT_COVERAGE
+        or coverage > 1.0
+    ):
+        raise MalformedPayload(
+            "Jiten frequency coverage floor failed: "
+            f"rankWeightCoverage={coverage!r}"
+        )
+
+    relevant_weight = stats.get("relevantRankWeight")
+    aligned_weight = stats.get("alignedRankWeight")
+    weights = (relevant_weight, aligned_weight)
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in weights
+    ) or not (
+        0 < aligned_weight <= relevant_weight <= relevant
+        and aligned_weight <= aligned
+    ):
+        raise MalformedPayload("Jiten frequency rank-weight totals are inconsistent")
+    expected_coverage = aligned_weight / relevant_weight
+    if not math.isclose(coverage, expected_coverage, rel_tol=1e-12, abs_tol=1e-12):
+        raise MalformedPayload("Jiten frequency rank-weight coverage is inconsistent")
+
+
 def normalize_record(payload):
     """Normalize a raw Jiten kanji payload into a clean record dict.
 
@@ -392,6 +911,8 @@ def normalize_record(payload):
         "examples": _select_examples(payload, on, kun),
         "global_words": _select_global_words(payload),
         "reading_entry_counts": _reading_entry_counts(payload, on, kun),
+        # Populated only by the validated bulk Global CSV join in run_build().
+        "reading_frequency_scores": [],
     }
 
 
@@ -455,10 +976,10 @@ def parse_kanjidic2(xml_text):
 
         misc = char.find("misc")
 
-        def _int(tag):
-            if misc is None:
+        def _int(tag, node=misc):
+            if node is None:
                 return None
-            txt = misc.findtext(tag)
+            txt = node.findtext(tag)
             if txt is None:
                 return None
             try:
@@ -485,7 +1006,7 @@ def kanjidic2_record(character, fields):
     builder works unchanged. Honest omissions: frequency_rank is None (Jiten's
     rank scale is not KANJIDIC2's newspaper-frequency and the two must not be
     conflated), and examples is empty (KANJIDIC2 supplies no example words), so
-    no frequency meta, reading-distribution donut, or enrichment is ever
+    no frequency meta, Frequency weight pie, or enrichment is ever
     fabricated for these characters.
     """
     senses = clean_meanings(fields.get("meanings"))
@@ -563,77 +1084,53 @@ def _largest_remainder_percents(counts, total):
     return floors
 
 
-def reading_distribution(record):
-    """Compute the truthful share of Jiten vocabulary entries by reading.
+def reading_frequency_distribution(record):
+    """Build a frequency-weight-only pie distribution for one kanji."""
+    scores = {}
+    classes = {}
+    for item in record.get("reading_frequency_scores") or []:
+        reading = item.get("reading")
+        score = item.get("score")
+        if (
+            not reading
+            or not isinstance(score, (int, float))
+            or isinstance(score, bool)
+            or not math.isfinite(score)
+            or score <= 0
+        ):
+            continue
+        scores[reading] = scores.get(reading, 0.0) + float(score)
+        classes.setdefault(reading, item.get("reading_class") or "Other")
+    total = sum(scores.values())
+    if total <= 0:
+        return {"total": 0.0, "segments": [], "collapsed": False}
 
-    Uses the COMPLETE Jiten group totals in ``record['reading_entry_counts']``
-    (each ``wordsByReading[].totalWords``, the full vocabulary-entry count for a
-    reading group) -- NEVER the 1-2 example words displayed in the entry. Each
-    segment keeps its actual reading plus its On/Kun/Other class as secondary
-    text. Segments are ordered by descending count, then normalized reading,
-    then first source position (already the order of reading_entry_counts). At
-    most ``MAX_DONUT_SEGMENTS`` segments: the top readings plus one explicit
-    "Other" segment folding the remaining tail. Percentages are integers summing
-    to exactly 100 via the largest-remainder method; the exact entry count rides
-    alongside so a nonzero tiny group rendered as 0%% stays explicit.
+    ordered = sorted(scores, key=lambda reading: (-scores[reading], reading))
+    collapsed = len(ordered) >= MAX_DONUT_SEGMENTS
+    named = ordered[: MAX_DONUT_SEGMENTS - 1] if collapsed else ordered
+    labels = list(named)
+    values = [scores[reading] for reading in named]
+    if collapsed:
+        tail = ordered[MAX_DONUT_SEGMENTS - 1:]
+        labels.append("")
+        values.append(sum(scores[reading] for reading in tail))
 
-    Returns {"total": N, "segments": [...]} with total 0 and no segments when no
-    valid positive group total exists -- the caller then omits the statistic
-    entirely rather than fabricating one from examples or ranks.
-    """
-    counts = record.get("reading_entry_counts") or []
-    total = sum(c["count"] for c in counts)
-    if total <= 0 or not counts:
-        return {"total": 0, "segments": []}
-
-    # counts is already deterministically ordered (desc count, reading, source).
-    if len(counts) > MAX_DONUT_SEGMENTS:
-        head = counts[: MAX_DONUT_SEGMENTS - 1]
-        tail = counts[MAX_DONUT_SEGMENTS - 1:]
-        kept = [(c["reading"], c["reading_class"], c["count"]) for c in head]
-        overflow = sum(c["count"] for c in tail)
-        kept.append(("", "Other", overflow))
-        collapsed = True
-    else:
-        kept = [(c["reading"], c["reading_class"], c["count"]) for c in counts]
-        collapsed = False
-
-    seg_counts = [c for _, _, c in kept]
-    percents = _largest_remainder_percents(seg_counts, total)
-
+    percents = _largest_remainder_percents(values, total)
     segments = []
-    color_i = 0
-    for (reading, cls, cnt), pct in zip(kept, percents):
-        if cls == "Other" and reading == "":
-            color = _DONUT_OTHER_COLOR
-        else:
-            color = _DONUT_COLORS[color_i % (len(_DONUT_COLORS) - 1)]
-            color_i += 1
+    for index, (reading, percent) in enumerate(zip(labels, percents)):
+        is_other = reading == ""
         segments.append({
             "reading": reading,
-            "reading_class": cls,
-            "count": cnt,
-            "percent": pct,
-            "color": color,
+            "reading_class": "Other" if is_other else classes.get(reading, "Other"),
+            "percent": percent,
+            "color": _DONUT_OTHER_COLOR if is_other else _DONUT_COLORS[index],
         })
     return {"total": total, "segments": segments, "collapsed": collapsed}
 
 
-DONUT_TITLE = "Reading distribution"
+# --- Per-entry raster Frequency weight chart (packaged PNG media) -------------
 
-
-def _segment_label(segment):
-    """Human legend label for a segment: reading (Class) or plain Other."""
-    reading = segment.get("reading") or ""
-    cls = segment.get("reading_class") or "Other"
-    if not reading:
-        return "Other"
-    return f"{reading} ({cls})"
-
-
-# --- Per-entry raster reading-distribution chart (packaged PNG media) ---------
-
-# The compact card ships the reading distribution as a deterministic per-entry
+# The compact card ships Frequency weight as a deterministic per-entry
 # PNG packaged as Yomitan dictionary media (referenced through a supported
 # structured-content <img>), rather than an inline CSS conic-gradient ring.
 # A raster image is what official Yomitan renders from an archive `path`, so it
@@ -650,42 +1147,23 @@ def _hex_to_rgba(hex_color, alpha=255):
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
 
-def reading_distribution_asset_name(character):
-    """Archive path for a character's packaged reading-distribution PNG.
-
-    Zero-padded lowercase hex code point under ``reading-distribution/`` so the
-    path is deterministic, collision-free, and independent of the glyph itself
-    (which may be filesystem-hostile).
-    """
-    return f"reading-distribution/{ord(character):05x}.png"
+def reading_frequency_asset_name(character):
+    """Archive path for a character's frequency-weighted reading pie."""
+    return f"reading-frequency/{ord(character):05x}.png"
 
 
-def build_reading_distribution_png(record):
-    """Render the reading-distribution pie for a record as PNG bytes.
+def build_reading_frequency_png(record):
+    """Return a deterministic PNG for Jiten frequency-weight shares."""
+    distribution = reading_frequency_distribution(record)
+    if not distribution["segments"]:
+        return None
+    return _build_pie_png(distribution["segments"])
 
-    Deterministic: the same record always yields byte-identical output. Uses the
-    same truthful segment data as :func:`reading_distribution` (share of Jiten
-    vocabulary entries by reading), drawn as an anti-aliased pie on a
-    128x128 transparent canvas, then flattened to a compact fixed-palette
-    ("P"-mode) PNG with a single transparent index. Returns ``None`` when the
-    record has no valid positive Jiten reading total (e.g. KANJIDIC2-only
-    records), so the caller omits the chart rather than fabricating one.
 
-    The pie only ever uses the fixed Okabe-Ito segment palette on a
-    transparent field, so a paletted encoding represents it faithfully at a
-    fraction of the truecolor bytes -- keeping a release with thousands of
-    per-character charts a reasonable size without any performance framework.
-    Anti-aliased edge pixels are mapped to the nearest solid segment colour and
-    a 50%% alpha threshold decides transparency, which stays crisp and clearly
-    multi-segment at the few-em size the popup renders it.
-    """
+def _build_pie_png(segments):
+    """Draw one deterministic filled pie from prepared shared segments."""
     from PIL import Image, ImageDraw
 
-    dist = reading_distribution(record)
-    if dist["total"] <= 0 or not dist["segments"]:
-        return None
-
-    # Supersample for smooth arc edges, then downsample to the target size.
     scale = 4
     size = READING_CHART_SIZE * scale
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
@@ -693,21 +1171,15 @@ def build_reading_distribution_png(record):
 
     pad = int(size * 0.06)
     box = [pad, pad, size - pad, size - pad]
-
-    # Draw wedges by cumulative percent. Start at -90 deg (12 o'clock) and go
-    # clockwise so the largest (first) segment leads from the top.
     start = -90.0
-    for seg in dist["segments"]:
-        sweep = seg["percent"] * 3.6  # percent -> degrees
+    for segment in segments:
+        sweep = segment["percent"] * 3.6
         end = start + sweep
-        # A zero-percent (but nonzero-count) tail contributes no wedge; skip it
-        # so we never emit a degenerate arc.
         if sweep > 0:
-            draw.pieslice(box, start, end, fill=_hex_to_rgba(seg["color"]))
+            draw.pieslice(box, start, end, fill=_hex_to_rgba(segment["color"]))
         start = end
 
     img = img.resize((READING_CHART_SIZE, READING_CHART_SIZE), Image.LANCZOS)
-
     return _flatten_to_palette_png(img)
 
 
@@ -760,20 +1232,8 @@ def _flatten_to_palette_png(rgba):
     return buf.getvalue()
 
 
-def reading_chart_alt_text(record):
-    """Concise text equivalent of the reading-distribution chart (alt text)."""
-    dist = reading_distribution(record)
-    if dist["total"] <= 0:
-        return ""
-    parts = [
-        f"{_segment_label(s)} {s['percent']} percent"
-        for s in dist["segments"]
-    ]
-    return DONUT_TITLE + ": " + ", ".join(parts)
-
-
-def build_reading_distribution_node(record):
-    """Build the packaged-PNG reading-distribution chart structured content.
+def build_reading_frequency_node(record):
+    """Build the packaged-PNG Frequency weight structured content.
 
     The graphic is a single supported ``img`` referencing the packaged PNG by
     its archive path; a caption and a visible text legend (colour swatch +
@@ -781,69 +1241,54 @@ def build_reading_distribution_node(record):
     text, so colour is never the sole channel and the chart degrades gracefully
     when the image cannot load.
     """
-    dist = reading_distribution(record)
-    if dist["total"] == 0:
-        return None
-    segments = dist["segments"]
-    alt = reading_chart_alt_text(record)
-
-    caption = {
-        "tag": "div",
-        "data": {"beeRole": "donut-caption"},
-        "content": DONUT_TITLE,
-    }
-
-    image = {
-        "tag": "img",
-        "data": {"beeRole": "reading-chart"},
-        "path": reading_distribution_asset_name(record["character"]),
-        "width": 4.25,
-        "height": 4.25,
-        "sizeUnits": "em",
-        "alt": alt,
-        "title": alt,
-        "collapsible": False,
-        "collapsed": False,
-        "background": False,
-    }
-
-    legend_items = []
-    for s in segments:
-        swatch = {
-            "tag": "span",
-            "data": {"beeRole": "donut-swatch"},
-            "style": {"background": s["color"], "color": s["color"]},
-            "content": "\u25a0",  # filled square, visible even without CSS colour
-        }
-        legend_items.append({
-            "tag": "li",
+    frequency = reading_frequency_distribution(record)
+    if frequency["segments"]:
+        segments = frequency["segments"]
+        alt = "Rank-derived frequency weight: " + ", ".join(
+            f"{segment.get('reading') or 'Other'} {segment['percent']} percent"
+            for segment in segments
+        )
+        legend_items = []
+        for segment in segments:
+            swatch = {
+                "tag": "span",
+                "data": {"beeRole": "donut-swatch"},
+                "style": {"background": segment["color"], "color": segment["color"]},
+                "content": "\u25a0",
+            }
+            legend_items.append({
+                "tag": "li",
+                "content": [
+                    swatch,
+                    f"{segment.get('reading') or 'Other'}: {segment['percent']}%",
+                ],
+            })
+        return {
+            "tag": "div",
+            "data": {"beeRole": "reading-donut"},
+            "lang": "en",
+            "title": alt,
             "content": [
-                swatch,
-                f"{_segment_label(s)}: {s['percent']}%",
+                {"tag": "div", "data": {"beeRole": "donut-caption"},
+                 "content": "Frequency weight"},
+                {"tag": "div", "data": {"beeRole": "reading-pie"}, "content": [{
+                    "tag": "img",
+                    "data": {"beeRole": "reading-chart"},
+                    "path": reading_frequency_asset_name(record["character"]),
+                    "width": 4.25,
+                    "height": 4.25,
+                    "sizeUnits": "em",
+                    "alt": alt,
+                    "title": alt,
+                    "collapsible": False,
+                    "collapsed": False,
+                    "background": False,
+                }]},
+                {"tag": "ul", "data": {"beeRole": "donut-legend"},
+                 "content": legend_items},
             ],
-        })
-    legend = {
-        "tag": "ul",
-        "data": {"beeRole": "donut-legend"},
-        "content": legend_items,
-    }
-
-    return {
-        "tag": "div",
-        "data": {"beeRole": "reading-donut"},
-        "lang": "en",
-        "title": alt,
-        "content": [
-            caption,
-            {"tag": "div", "data": {"beeRole": "reading-pie"},
-             "content": [image]},
-            legend,
-        ],
-    }
-
-
-# Compatibility for callers from the earlier packaged-chart implementation.
-build_reading_chart_node = build_reading_distribution_node
+        }
+    return None
 
 
 # --- KanjiVG-sourced phonetic families ---------------------------------------
@@ -1050,9 +1495,12 @@ def build_stroke_node(character, info):
         content.append({
             "tag": "img",
             "path": asset,
+            "width": 6,
+            "height": 6,
+            "sizeUnits": "em",
             "alt": alt,
             "title": alt,
-            "collapsible": True,
+            "collapsible": False,
             "collapsed": False,
             "background": False,
             "data": {"beeRole": "stroke-image"},
@@ -1289,8 +1737,8 @@ def _detail_content(record, enrichment=None):
       2. the TOP THREE readings by Jiten vocabulary-entry totals as plain chips
          (not split into On/Kun groups),
       3. a compact meaning line,
-      4. the reading-distribution chart as a packaged raster PNG (omitted, never
-         faked, for KANJIDIC2-only records) with alt text + a visible legend,
+      4. the Frequency weight pie as a packaged raster PNG (omitted, never faked,
+         for KANJIDIC2-only records) with alt text + a visible legend,
       5. exactly SIX globally highest-frequency de-duplicated words in a
          responsive two-column (3-left / 3-right) grid with ruby + gloss.
 
@@ -1329,9 +1777,9 @@ def _detail_content(record, enrichment=None):
             "content": "; ".join(record["senses"]),
         })
 
-    # 4. Reading-distribution chart as a packaged raster PNG. Omitted (never
-    #    faked) when the record has no valid Jiten reading totals.
-    chart = build_reading_distribution_node(record)
+    # 4. Rank-derived Frequency weight as a packaged raster PNG. Omitted when
+    #    the validated bulk source has no aligned reading weights.
+    chart = build_reading_frequency_node(record)
     if chart is not None:
         body.append(chart)
 
@@ -1508,23 +1956,33 @@ def build_banks(records, aliases=None, enrichment=None):
 TITLE = "Bee's Ultimate Kanji Dictionary"
 REPO = "bee-san/bees-ultimate-kanji-dictionary"
 ZIP_NAME = "bees-ultimate-kanji-dictionary.zip"
+SOURCE_SNAPSHOT_NAME = "source-snapshot.zip"
+SOURCE_LOCK_NAME = "SOURCE-LOCK.json"
+RELEASE_ASSET_NAMES = (
+    ZIP_NAME,
+    "MANIFEST.json",
+    "SHA256SUMS",
+    JITEN_FREQUENCY_ASSET_NAME,
+    SOURCE_SNAPSHOT_NAME,
+    SOURCE_LOCK_NAME,
+)
+PINNED_BUILD_CONTAINER = (
+    "python:3.11.15-bookworm@sha256:"
+    "a8f8fbe1a0edc9e4dddafa64ba73f7e04be7be5ebc23f332362e779e0a2e4e52"
+)
 
 ATTRIBUTION = (
-    "Dictionary data derived from Jiten (https://jiten.moe) and directly from "
-    "KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary "
-    "Research and Development Group (EDRDG). Data is redistributed under CC BY-SA 4.0; "
-    "see https://creativecommons.org/licenses/by-sa/4.0/ and "
+    "Dictionary data derived from Jiten (https://jiten.moe), including its Global "
+    "frequency-list CSV, and directly from KANJIDIC2, using JMdict/KANJIDIC data "
+    "from the Electronic Dictionary Research and Development Group (EDRDG). Data "
+    "and rank-weight adaptations are redistributed under CC BY-SA 4.0; see "
+    "https://creativecommons.org/licenses/by-sa/4.0/ and "
     "https://www.edrdg.org/edrdg/licence.html."
 )
 
 LICENSE_DATA_TEXT = (
-    "Dictionary data derived from Jiten (https://jiten.moe) and directly from\n"
-    "KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary\n"
-    "Research and Development Group (EDRDG).\n"
-    "Data is redistributed under CC BY-SA 4.0; see\n"
-    "https://creativecommons.org/licenses/by-sa/4.0/ and\n"
-    "https://www.edrdg.org/edrdg/licence.html.\n"
-)
+    pathlib.Path(__file__).resolve().parent.parent / "LICENSE-data.txt"
+).read_text(encoding="utf-8")
 
 # KanjiVG (stroke-order SVGs + phonetic-component markers) is Copyright (C)
 # Ulrich Apel, distributed under CC BY-SA 3.0. Bundled SVGs are adapted (stroke
@@ -1734,9 +2192,6 @@ STYLES_CSS = """\
   [data-sc-bee-role="hero-glyph"] { font-size: 2em; }
   [data-sc-bee-role="reading-group"] { align-items: flex-start; }
   [data-sc-bee-role="vocab-grid"] { grid-template-columns: 1fr; }
-  [data-sc-bee-role="reading-donut"] { justify-content: center; }
-  [data-sc-bee-role="reading-pie"] { flex-basis: 100%; text-align: center; margin: 0 0 0.35em; }
-  [data-sc-bee-role="donut-legend"] { flex-basis: 100%; }
 }
 
 /* Progressive disclosure: restrained, keyboard-focusable summaries with a
@@ -1914,7 +2369,8 @@ def build_index(revision):
 
 
 def build_manifest(revision, content_hash, date, source_counts,
-                   enrichment_counts, sitemap_size, code_revision):
+                   enrichment_counts, sitemap_size, code_revision,
+                   frequency_stats=None, source_snapshot=None):
     """Build the machine-readable source/revision manifest (MANIFEST.json).
 
     Describes exactly how this canonical release was produced so an importer or
@@ -1930,6 +2386,84 @@ def build_manifest(revision, content_hash, date, source_counts,
     """
     sc = source_counts or {}
     ec = enrichment_counts or {}
+    fs = frequency_stats or {}
+    sources = {
+        "jiten": {
+            "url": "https://jiten.moe",
+            "records": sc.get("jiten", 0),
+            "sitemapCharacters": sitemap_size,
+            "acquisition": "once per UTC day, unauthenticated",
+            "role": "authoritative (enriched entries)",
+        },
+        "kanjidic2": {
+            "url": "https://www.edrdg.org/wiki/index.php/KANJIDIC_Project",
+            "records": sc.get("kanjidic2", 0),
+            "role": "licensed fallback for characters Jiten does not serve",
+        },
+        "kanjivg": {
+            "url": "https://kanjivg.tagaini.net/",
+            "revision": KANJIVG_REVISION,
+            "assets": ec.get("assets", 0),
+            "role": "stroke-order diagrams + phonetic-component relationships",
+        },
+    }
+    if fs:
+        sources["jitenGlobalFrequency"] = {
+            "url": fs.get("url", JITEN_FREQUENCY_CSV_URL),
+            "sha256": fs.get("sha256", ""),
+            "byteCount": fs.get("byteCount", 0),
+            "retrievedDate": fs.get("retrievedDate", ""),
+            "schema": fs.get("schema", "Word,Form,Rank"),
+            "sourceRows": fs.get("sourceRows", 0),
+            "exactDuplicateRows": fs.get("exactDuplicateRows", 0),
+            "conflictingSurfaceReadingPairs": fs.get(
+                "conflictingSurfaceReadingPairs", 0
+            ),
+            "excludedConflictingRows": fs.get("excludedConflictingRows", 0),
+            "rows": fs.get("rows", 0),
+            "relevantRows": fs.get("relevantRows", 0),
+            "alignedRows": fs.get("alignedRows", 0),
+            "ambiguousOrUnalignedRows": fs.get("ambiguousOrUnalignedRows", 0),
+            "readingAssignments": fs.get("readingAssignments", 0),
+            "relevantRankWeight": fs.get("relevantRankWeight", 0.0),
+            "alignedRankWeight": fs.get("alignedRankWeight", 0.0),
+            "rankWeightCoverage": fs.get("rankWeightCoverage", 0.0),
+            "charactersWithScores": fs.get("charactersWithScores", 0),
+            "readingGroupsWithScores": fs.get("readingGroupsWithScores", 0),
+            "algorithm": fs.get("algorithm", ""),
+            "algorithmSource": (
+                "https://github.com/Sirush/Jiten/blob/"
+                "eb0f493b9bee06a21656ff9698a7ff29520277ea/"
+                "Jiten.Api/Jobs/ComputationJob.cs#L569-L590"
+            ),
+            "alignmentSource": (
+                "https://github.com/Sirush/Jiten/blob/"
+                "eb0f493b9bee06a21656ff9698a7ff29520277ea/"
+                "Jiten.Core/Data/JMDict/KanjiReadingDecomposer.cs"
+            ),
+            "metric": fs.get("metric", ""),
+            "semantics": "rank-derived weight, not observed occurrence probability",
+            "modifications": (
+                "exact duplicate rows collapsed; conflicting Word/Form ranks excluded; "
+                "unique KANJIDIC-constrained kanji-reading alignments aggregated; "
+                "CSV-only calculation omits Jiten's SQL fallback rank for unranked "
+                "forms and does not apply its 3% pruning/renormalization stage"
+            ),
+            "acquisition": "once per UTC day, unauthenticated bulk CSV",
+            "licence": "CC BY-SA 4.0",
+            "licenceUrl": "https://creativecommons.org/licenses/by-sa/4.0/",
+        }
+    snapshot = source_snapshot or {}
+    if snapshot:
+        sources["sourceSnapshot"] = {
+            "asset": SOURCE_SNAPSHOT_NAME,
+            "sha256": snapshot.get("sha256", ""),
+            "byteCount": snapshot.get("byteCount", 0),
+            "lockAsset": SOURCE_LOCK_NAME,
+            "lockSha256": snapshot.get("lockSha256", ""),
+            "fileCount": snapshot.get("fileCount", 0),
+            "role": "exact dated inputs sufficient for an offline rebuild",
+        }
     return {
         "title": TITLE,
         "revision": revision,
@@ -1939,26 +2473,7 @@ def build_manifest(revision, content_hash, date, source_counts,
         "indexUrl": f"https://raw.githubusercontent.com/{REPO}/main/dist/index.json",
         "url": f"https://github.com/{REPO}",
         "codeRevision": code_revision,
-        "sources": {
-            "jiten": {
-                "url": "https://jiten.moe",
-                "records": sc.get("jiten", 0),
-                "sitemapCharacters": sitemap_size,
-                "acquisition": "once per UTC day, unauthenticated",
-                "role": "authoritative (enriched entries)",
-            },
-            "kanjidic2": {
-                "url": "https://www.edrdg.org/wiki/index.php/KANJIDIC_Project",
-                "records": sc.get("kanjidic2", 0),
-                "role": "licensed fallback for characters Jiten does not serve",
-            },
-            "kanjivg": {
-                "url": "https://kanjivg.tagaini.net/",
-                "revision": KANJIVG_REVISION,
-                "assets": ec.get("assets", 0),
-                "role": "stroke-order diagrams + phonetic-component relationships",
-            },
-        },
+        "sources": sources,
         "records": {
             "total": sc.get("jiten", 0) + sc.get("kanjidic2", 0),
             "jiten": sc.get("jiten", 0),
@@ -1979,13 +2494,17 @@ def build_manifest(revision, content_hash, date, source_counts,
 
 
 def content_hash(banks, assets=None, source_counts=None,
-                 enrichment_counts=None, sitemap_size=0):
+                 enrichment_counts=None, sitemap_size=0, frequency_stats=None):
     """SHA-256 over all revision-independent package content.
 
     The revision and generated manifest fields are excluded, but banks, assets,
     updater metadata, styles, and bundled licence notices are covered. Any
     user-visible package change therefore requires a fresh release revision.
     """
+    hash_frequency_stats = dict(frequency_stats or {})
+    # Acquisition time is provenance, not package content. Identical source
+    # bytes and generated data must hash identically on consecutive UTC days.
+    hash_frequency_stats.pop("retrievedDate", None)
     material = {
         "banks": {name: banks[name] for _, name in BANK_FILES},
         "package": {
@@ -1998,6 +2517,7 @@ def content_hash(banks, assets=None, source_counts=None,
                 enrichment_counts=enrichment_counts or {},
                 sitemap_size=sitemap_size,
                 code_revision="",
+                frequency_stats=hash_frequency_stats,
             ),
             "styles.css": STYLES_CSS,
             "LICENSE-data.txt": LICENSE_DATA_TEXT,
@@ -2026,11 +2546,171 @@ _ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 def _zip_member(name, data):
     info = zipfile.ZipInfo(filename=name, date_time=_ZIP_DATE)
     info.compress_type = zipfile.ZIP_DEFLATED
-    info.external_attr = (0o644 & 0xFFFF) << 16  # -rw-r--r--
+    info.external_attr = (stat.S_IFREG | 0o644) << 16
     info.create_system = 3  # unix
     if isinstance(data, str):
         data = data.encode("utf-8")
     return info, data
+
+
+MAX_SOURCE_SNAPSHOT_BYTES = 128 * 1024 * 1024
+MAX_SOURCE_MEMBER_BYTES = 16 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class ConsumedSource:
+    """Digest-bound bytes consumed by the build before release snapshotting."""
+
+    path: pathlib.Path | None
+    raw: bytes | None
+    byte_count: int
+    sha256: str
+    max_bytes: int
+
+
+def record_consumed_source(
+    sources, archive_name, raw, *, path=None, max_bytes=MAX_SOURCE_MEMBER_BYTES
+):
+    """Record one canonical consumed input without trusting a later cache reread."""
+    if not isinstance(sources, dict):
+        raise MalformedPayload("consumed source registry is invalid")
+    if not isinstance(archive_name, str) or "\\" in archive_name:
+        raise MalformedPayload("consumed source archive name is invalid")
+    pure = pathlib.PurePosixPath(archive_name)
+    if (
+        not archive_name
+        or pure.is_absolute()
+        or ".." in pure.parts
+        or "." in pure.parts
+        or str(pure) != archive_name
+    ):
+        raise MalformedPayload("consumed source archive name is unsafe")
+    if (
+        isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or max_bytes < 0
+    ):
+        raise MalformedPayload("consumed source byte limit is invalid")
+    if not isinstance(raw, bytes) or len(raw) > max_bytes:
+        raise MalformedPayload("consumed source exceeds its byte limit")
+    item = ConsumedSource(
+        path=pathlib.Path(path) if path is not None else None,
+        raw=None if path is not None else raw,
+        byte_count=len(raw),
+        sha256=hashlib.sha256(raw).hexdigest(),
+        max_bytes=max_bytes,
+    )
+    previous = sources.get(archive_name)
+    if previous is not None and previous != item:
+        raise MalformedPayload(f"conflicting consumed source: {archive_name}")
+    sources[archive_name] = item
+
+
+def build_source_snapshot(*, date, consumed_sources):
+    """Archive only digest-bound bytes that the build actually consumed."""
+    if not isinstance(consumed_sources, dict) or not consumed_sources:
+        raise MalformedPayload("consumed source registry is required")
+    if any(not isinstance(item, ConsumedSource) for item in consumed_sources.values()):
+        raise MalformedPayload("consumed source registry contains an invalid item")
+    for name, item in consumed_sources.items():
+        pure = pathlib.PurePosixPath(name) if isinstance(name, str) else None
+        if (
+            pure is None
+            or not name
+            or "\\" in name
+            or pure.is_absolute()
+            or "." in pure.parts
+            or ".." in pure.parts
+            or str(pure) != name
+        ):
+            raise MalformedPayload("consumed source registry contains an unsafe name")
+        if (
+            isinstance(item.byte_count, bool)
+            or not isinstance(item.byte_count, int)
+            or item.byte_count < 0
+            or isinstance(item.max_bytes, bool)
+            or not isinstance(item.max_bytes, int)
+            or item.max_bytes < item.byte_count
+            or not isinstance(item.sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", item.sha256) is None
+            or (item.path is None) == (item.raw is None)
+        ):
+            raise MalformedPayload("consumed source registry contains invalid metadata")
+    declared_total = sum(item.byte_count for item in consumed_sources.values())
+    if declared_total > MAX_SOURCE_SNAPSHOT_BYTES:
+        raise MalformedPayload("source snapshot exceeds the total byte limit")
+
+    members = {}
+    for name, item in sorted(consumed_sources.items()):
+        if item.raw is not None:
+            raw = item.raw
+        else:
+            path = item.path
+            if path is None or path.is_symlink() or not path.is_file():
+                raise MalformedPayload(f"consumed source is missing or invalid: {name}")
+            try:
+                size = path.stat().st_size
+            except OSError as exc:
+                raise MalformedPayload(f"consumed source cannot be inspected: {name}") from exc
+            if size != item.byte_count:
+                raise MalformedPayload(f"consumed source changed after consumption: {name}")
+            raw = _read_file_bytes_bounded(
+                path,
+                min(item.max_bytes, item.byte_count),
+                "digest-bound consumed source",
+            )
+        if (
+            len(raw) != item.byte_count
+            or hashlib.sha256(raw).hexdigest() != item.sha256
+        ):
+            raise MalformedPayload(f"consumed source changed after consumption: {name}")
+        members[name] = raw
+
+    repo_root = pathlib.Path(__file__).resolve().parent.parent
+    uv_lock_bytes = _read_file_bytes_bounded(
+        repo_root / "uv.lock", 1024 * 1024, "uv dependency lock"
+    )
+    package_lock_bytes = _read_file_bytes_bounded(
+        repo_root / "package-lock.json", 1024 * 1024, "npm dependency lock"
+    )
+    lock = {
+        "schemaVersion": 1,
+        "acquisitionDate": date,
+        "generator": {
+            "repository": f"https://github.com/{REPO}",
+            "codeRevision": _code_revision(),
+            "container": PINNED_BUILD_CONTAINER,
+            "python": ".".join(str(part) for part in sys.version_info[:3]),
+            "pillow": importlib.metadata.version("Pillow"),
+            "uv": "0.11.28",
+            "node": "22.23.1",
+            "uvLockSha256": hashlib.sha256(uv_lock_bytes).hexdigest(),
+            "packageLockSha256": hashlib.sha256(package_lock_bytes).hexdigest(),
+        },
+        "sources": {
+            "jitenKanjiApi": {"sitemapUrl": SITEMAP_URL, "apiBase": API_BASE},
+            "jitenGlobalFrequency": {"url": JITEN_FREQUENCY_CSV_URL},
+            "kanjidic2": {"url": KANJIDIC2_URL},
+            "kanjiVg": {"revision": KANJIVG_REVISION, "baseUrl": KANJIVG_BASE},
+        },
+        "files": [
+            {
+                "path": name,
+                "byteCount": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+            for name, raw in sorted(members.items())
+        ],
+    }
+    lock_bytes = dump_json(lock).encode("utf-8")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, raw in sorted(members.items()):
+            info, payload = _zip_member(name, raw)
+            archive.writestr(info, payload)
+        info, payload = _zip_member(SOURCE_LOCK_NAME, lock_bytes)
+        archive.writestr(info, payload)
+    return buf.getvalue(), lock
 
 
 def build_zip(banks, revision, assets=None, manifest=None):
@@ -2119,11 +2799,26 @@ def bind_release_artifacts_to_code_revision(out_dir, code_revision, revision=Non
     zip_bytes = buf.getvalue()
     zip_path.write_bytes(zip_bytes)
     manifest_path.write_bytes(manifest_bytes)
-    checksum_path.write_text(
-        f"{hashlib.sha256(zip_bytes).hexdigest()}  {ZIP_NAME}\n"
-        f"{hashlib.sha256(manifest_bytes).hexdigest()}  MANIFEST.json\n",
-        encoding="utf-8",
-    )
+    checksum_lines = [
+        f"{hashlib.sha256(zip_bytes).hexdigest()}  {ZIP_NAME}",
+        f"{hashlib.sha256(manifest_bytes).hexdigest()}  MANIFEST.json",
+    ]
+    for asset_name in (
+        JITEN_FREQUENCY_ASSET_NAME,
+        SOURCE_SNAPSHOT_NAME,
+        SOURCE_LOCK_NAME,
+    ):
+        asset_path = out_dir / asset_name
+        if not asset_path.exists():
+            continue
+        digest = hashlib.sha256()
+        with asset_path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        checksum_lines.append(
+            f"{digest.hexdigest()}  {asset_name}"
+        )
+    checksum_path.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
 
 
 # --- Daily acquisition with a resumable per-character cache ------------------
@@ -2132,6 +2827,9 @@ API_BASE = "https://api.jiten.moe/api/kanji"
 SITEMAP_URL = f"{API_BASE}/sitemap-characters"
 USER_AGENT = "bees-ultimate-kanji-dictionary (+https://github.com/bee-san/bees-ultimate-kanji-dictionary)"
 TIMEOUT_SECONDS = 30
+MAX_HTTP_TOTAL_SECONDS = 120
+MAX_HTTP_RESPONSE_BYTES = 16 * 1024 * 1024
+HTTP_CHUNK_BYTES = 64 * 1024
 MAX_RETRIES = 2  # bounded retries for transport / 429 / 5xx only
 
 
@@ -2145,29 +2843,95 @@ def cache_filename(character):
     return f"{codepoints}.json"
 
 
-def http_get_json(url):
-    """GET a URL and parse JSON, with bounded retries for transient errors.
+def _read_response_bounded(response, max_bytes, deadline):
+    """Stream one HTTP response without trusting its declared or actual size."""
+    raw_length = response.headers.get("Content-Length")
+    expected_length = None
+    if raw_length is not None:
+        try:
+            expected_length = int(raw_length)
+        except (TypeError, ValueError) as exc:
+            raise MalformedPayload("HTTP response has invalid Content-Length") from exc
+        if expected_length < 0 or expected_length > max_bytes:
+            raise MalformedPayload("HTTP response Content-Length exceeds the byte limit")
 
-    Raises NotFound on 404. Retries only transport errors, 429, and 5xx.
-    """
+    chunks = []
+    total = 0
+    while True:
+        if time.monotonic() > deadline:
+            raise MalformedPayload("HTTP transfer exceeded the total deadline")
+        chunk = response.read(min(HTTP_CHUNK_BYTES, max_bytes + 1 - total))
+        if time.monotonic() > deadline:
+            raise MalformedPayload("HTTP transfer exceeded the total deadline")
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_bytes:
+            raise MalformedPayload("HTTP response exceeds the byte limit")
+        chunks.append(chunk)
+    if expected_length is not None and total != expected_length:
+        raise MalformedPayload("HTTP response ended before Content-Length bytes arrived")
+    return b"".join(chunks)
+
+
+def _read_file_bytes_bounded(path, max_bytes, label):
+    """Read a cache/source file once with a hard size bound."""
+    path = pathlib.Path(path)
+    if path.stat().st_size > max_bytes:
+        raise MalformedPayload(f"{label} exceeds the byte limit")
+    with path.open("rb") as handle:
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise MalformedPayload(f"{label} exceeds the byte limit")
+    return raw
+
+
+def http_get_bytes(
+    url, max_bytes=MAX_HTTP_RESPONSE_BYTES, total_seconds=MAX_HTTP_TOTAL_SECONDS
+):
+    """GET bounded raw bytes with bounded retries and a total deadline."""
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive integer")
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     last_err = None
+    deadline = time.monotonic() + total_seconds
     for attempt in range(MAX_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MalformedPayload("HTTP transfer exceeded the total deadline")
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise NotFound(url) from e
-            if e.code == 429 or 500 <= e.code < 600:
-                last_err = e
+            with urllib.request.urlopen(
+                req, timeout=min(TIMEOUT_SECONDS, max(1.0, remaining))
+            ) as response:
+                return _read_response_bounded(response, max_bytes, deadline)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise NotFound(url) from exc
+            if exc.code == 429 or 500 <= exc.code < 600:
+                last_err = exc
             else:
                 raise
-        except urllib.error.URLError as e:
-            last_err = e
+        except urllib.error.URLError as exc:
+            last_err = exc
         if attempt < MAX_RETRIES:
-            time.sleep(2 ** attempt)  # small backoff: 1s, 2s
-    raise last_err if last_err is not None else RuntimeError(f"failed to GET {url}")
+            delay = 2 ** attempt
+            if time.monotonic() + delay > deadline:
+                raise MalformedPayload("HTTP transfer exceeded the total deadline")
+            time.sleep(delay)
+    raise last_err if last_err is not None else RuntimeError(
+        f"failed to GET raw bytes from {url}"
+    )
+
+
+def http_get_json(url, max_bytes=MAX_HTTP_RESPONSE_BYTES):
+    """GET and parse bounded UTF-8 JSON."""
+    raw = http_get_bytes(url, max_bytes=max_bytes)
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise MalformedPayload("HTTP JSON response is not valid UTF-8") from exc
+    except json.JSONDecodeError as exc:
+        raise MalformedPayload("HTTP response is not valid JSON") from exc
 
 
 def fetch_kanji(character):
@@ -2183,7 +2947,9 @@ def fetch_sitemap():
     return [c for c in data if isinstance(c, str) and c]
 
 
-def fetch_sitemap_cached(cache_dir, date, fetcher=fetch_sitemap, offline=False):
+def fetch_sitemap_cached(
+    cache_dir, date, fetcher=fetch_sitemap, offline=False, consumed_sources=None
+):
     """Return the daily sitemap, reusing an atomic dated cache on reruns."""
     import pathlib as _pl
 
@@ -2192,23 +2958,156 @@ def fetch_sitemap_cached(cache_dir, date, fetcher=fetch_sitemap, offline=False):
     path = day_dir / "sitemap.json"
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            raw = _read_file_bytes_bounded(
+                path, MAX_HTTP_RESPONSE_BYTES, "cached Jiten sitemap"
+            )
+            data = json.loads(raw.decode("utf-8"))
             if isinstance(data, list) and all(isinstance(c, str) and c for c in data):
+                if consumed_sources is not None:
+                    record_consumed_source(
+                        consumed_sources,
+                        f"cache/{date}/sitemap.json",
+                        raw,
+                        path=path,
+                        max_bytes=MAX_HTTP_RESPONSE_BYTES,
+                    )
                 return data
-        except (ValueError, OSError):
+        except (ValueError, OSError, UnicodeDecodeError, MalformedPayload):
             pass
     if offline:
         raise FileNotFoundError(f"Jiten sitemap cache missing: {path}")
     data = fetcher()
     if not isinstance(data, list) or not all(isinstance(c, str) and c for c in data):
         raise MalformedPayload("sitemap is not a list of characters")
+    raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    if len(raw) > MAX_HTTP_RESPONSE_BYTES:
+        raise MalformedPayload("Jiten sitemap exceeds the byte limit")
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.write_bytes(raw)
     tmp.replace(path)
+    data = json.loads(raw.decode("utf-8"))
+    if consumed_sources is not None:
+        record_consumed_source(
+            consumed_sources,
+            f"cache/{date}/sitemap.json",
+            raw,
+            path=path,
+            max_bytes=MAX_HTTP_RESPONSE_BYTES,
+        )
     return data
 
 
-def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
+def fetch_jiten_global_frequency_csv():
+    """Fetch Jiten's official downloadable Global frequency CSV once."""
+    return http_get_bytes(
+        JITEN_FREQUENCY_CSV_URL,
+        max_bytes=MAX_JITEN_FREQUENCY_BYTES,
+    )
+
+
+@dataclass(frozen=True)
+class JitenFrequencySourceSnapshot:
+    """One immutable source snapshot used for scoring, provenance, and release."""
+
+    raw: bytes
+    text: str
+    sha256: str
+    path: pathlib.Path
+    from_cache: bool
+
+
+def _jiten_frequency_snapshot(raw, path, from_cache):
+    if not isinstance(raw, bytes) or not raw:
+        raise MalformedPayload("Jiten frequency CSV download is empty")
+    if len(raw) > MAX_JITEN_FREQUENCY_BYTES:
+        raise MalformedPayload("Jiten frequency CSV exceeds the byte limit")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise MalformedPayload("Jiten frequency CSV is not valid UTF-8") from exc
+    parse_jiten_frequency_csv(text)
+    return JitenFrequencySourceSnapshot(
+        raw=raw,
+        text=text,
+        sha256=hashlib.sha256(raw).hexdigest(),
+        path=pathlib.Path(path),
+        from_cache=from_cache,
+    )
+
+
+def acquire_jiten_frequency_csv_source(
+    cache_dir, date, fetcher=fetch_jiten_global_frequency_csv, offline=False
+):
+    """Return one validated, byte-bounded, immutable dated source snapshot."""
+    day_dir = pathlib.Path(cache_dir) / date
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / "jiten_freq_global.csv"
+    if path.exists():
+        try:
+            raw = _read_file_bytes_bounded(
+                path,
+                MAX_JITEN_FREQUENCY_BYTES,
+                "cached Jiten frequency CSV",
+            )
+            return _jiten_frequency_snapshot(raw, path, True)
+        except (OSError, UnicodeDecodeError, MalformedPayload) as exc:
+            if offline:
+                raise MalformedPayload(
+                    f"cached Jiten frequency CSV is invalid: {path}"
+                ) from exc
+    elif offline:
+        raise FileNotFoundError(f"Jiten frequency CSV cache missing: {path}")
+
+    source = fetcher()
+    if isinstance(source, str):
+        raw = source.encode("utf-8")
+    elif isinstance(source, bytes):
+        raw = source
+    else:
+        raise MalformedPayload("Jiten frequency CSV fetcher returned no bytes")
+    snapshot = _jiten_frequency_snapshot(raw, path, False)
+    # Validate completely before atomically replacing any same-day cache entry.
+    tmp = path.with_suffix(".csv.tmp")
+    tmp.write_bytes(snapshot.raw)
+    tmp.replace(path)
+    return snapshot
+
+
+def _quarantine_jiten_frequency_snapshot(snapshot):
+    """Remove only the exact cached bytes that failed production quality gates."""
+    try:
+        current = _read_file_bytes_bounded(
+            snapshot.path,
+            MAX_JITEN_FREQUENCY_BYTES,
+            "cached Jiten frequency CSV",
+        )
+    except (FileNotFoundError, OSError, MalformedPayload):
+        return
+    if hashlib.sha256(current).hexdigest() == snapshot.sha256:
+        snapshot.path.unlink(missing_ok=True)
+
+
+def fetch_jiten_frequency_csv_source(
+    cache_dir, date, fetcher=fetch_jiten_global_frequency_csv, offline=False
+):
+    """Compatibility wrapper returning decoded text from the immutable snapshot."""
+    return acquire_jiten_frequency_csv_source(
+        cache_dir, date, fetcher, offline
+    ).text
+
+
+def jiten_frequency_csv_digest(cache_dir, date):
+    """SHA-256 of a bounded exact cached source snapshot."""
+    path = pathlib.Path(cache_dir) / date / "jiten_freq_global.csv"
+    raw = _read_file_bytes_bounded(
+        path, MAX_JITEN_FREQUENCY_BYTES, "cached Jiten frequency CSV"
+    )
+    return hashlib.sha256(raw).hexdigest()
+
+
+def fetch_all(
+    characters, cache_dir, date, fetcher=fetch_kanji, consumed_sources=None
+):
     """Fetch payloads for characters, using a resumable dated on-disk cache.
 
     Cache layout: cache_dir/DATE/<codepoints>.json. Files already present for
@@ -2225,24 +3124,64 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
     for char in characters:
         path = day_dir / cache_filename(char)
         missing = path.with_suffix(".missing")
-        if missing.exists():
-            continue
         if path.exists():
             try:
-                out[char] = json.loads(path.read_text(encoding="utf-8"))
+                raw = _read_file_bytes_bounded(
+                    path, MAX_HTTP_RESPONSE_BYTES, "cached Jiten kanji payload"
+                )
+                out[char] = json.loads(raw.decode("utf-8"))
+                if consumed_sources is not None:
+                    record_consumed_source(
+                        consumed_sources,
+                        f"cache/{date}/{path.name}",
+                        raw,
+                        path=path,
+                        max_bytes=MAX_HTTP_RESPONSE_BYTES,
+                    )
+                missing.unlink(missing_ok=True)
                 continue
-            except (ValueError, OSError):
-                pass  # corrupt cache file -> refetch
+            except (ValueError, OSError, UnicodeDecodeError, MalformedPayload):
+                path.unlink(missing_ok=True)
+                missing.unlink(missing_ok=True)
+        if missing.exists():
+            if consumed_sources is not None:
+                record_consumed_source(
+                    consumed_sources,
+                    f"cache/{date}/{missing.name}",
+                    b"",
+                    path=missing,
+                    max_bytes=0,
+                )
+            continue
         try:
             payload = fetcher(char)
         except NotFound:
             missing.touch()
+            if consumed_sources is not None:
+                record_consumed_source(
+                    consumed_sources,
+                    f"cache/{date}/{missing.name}",
+                    b"",
+                    path=missing,
+                    max_bytes=0,
+                )
             continue  # skip 404s
         # atomic-ish write: temp then replace
+        raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        if len(raw) > MAX_HTTP_RESPONSE_BYTES:
+            raise MalformedPayload("Jiten kanji payload exceeds the byte limit")
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.write_bytes(raw)
         tmp.replace(path)
-        out[char] = payload
+        out[char] = json.loads(raw.decode("utf-8"))
+        if consumed_sources is not None:
+            record_consumed_source(
+                consumed_sources,
+                f"cache/{date}/{path.name}",
+                raw,
+                path=path,
+                max_bytes=MAX_HTTP_RESPONSE_BYTES,
+            )
     return out
 
 
@@ -2250,6 +3189,25 @@ def fetch_all(characters, cache_dir, date, fetcher=fetch_kanji):
 
 KANJIVG_REVISION = "61e39cfc29724132a6f8823b166296932985a0ff"
 KANJIVG_BASE = f"https://raw.githubusercontent.com/KanjiVG/kanjivg/{KANJIVG_REVISION}/kanji"
+MIN_KANJIVG_STROKE_SETS = 6_000
+
+
+def validate_kanjivg_coverage(stroke_sets, *, cache_dir=None, date=None):
+    """Reject partial production media and invalidate poisoned negative markers."""
+    if (
+        isinstance(stroke_sets, bool)
+        or not isinstance(stroke_sets, int)
+        or stroke_sets < MIN_KANJIVG_STROKE_SETS
+    ):
+        if cache_dir is not None and date is not None:
+            day = pathlib.Path(cache_dir) / date
+            for marker in day.glob("*.missing") if day.is_dir() else ():
+                if marker.is_file() and not marker.is_symlink():
+                    marker.unlink()
+        raise MalformedPayload(
+            "KanjiVG coverage floor failed: "
+            f"strokeSets={stroke_sets!r} < {MIN_KANJIVG_STROKE_SETS}"
+        )
 
 
 def kanjivg_cache_filename(character):
@@ -2257,26 +3215,12 @@ def kanjivg_cache_filename(character):
     return f"{ord(character):05x}.svg"
 
 
-def http_get_text(url):
-    """GET a URL and return decoded text, with the same bounded retries."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    last_err = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-                return resp.read().decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 404:
-                raise NotFound(url) from e
-            if e.code == 429 or 500 <= e.code < 600:
-                last_err = e
-            else:
-                raise
-        except urllib.error.URLError as e:
-            last_err = e
-        if attempt < MAX_RETRIES:
-            time.sleep(2 ** attempt)
-    raise last_err if last_err is not None else RuntimeError(f"failed to GET {url}")
+def http_get_text(url, max_bytes=MAX_HTTP_RESPONSE_BYTES):
+    """GET bounded UTF-8 text through the common streaming transport."""
+    try:
+        return http_get_bytes(url, max_bytes=max_bytes).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise MalformedPayload("HTTP text response is not valid UTF-8") from exc
 
 
 def fetch_kanjivg(character):
@@ -2284,7 +3228,9 @@ def fetch_kanjivg(character):
     return http_get_text(f"{KANJIVG_BASE}/{kanjivg_cache_filename(character)}")
 
 
-def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
+def fetch_kanjivg_all(
+    characters, cache_dir, date, fetcher=fetch_kanjivg, consumed_sources=None
+):
     """Fetch KanjiVG SVGs, reusing a resumable dated on-disk cache.
 
     Cache layout mirrors the Jiten fetch: cache_dir/DATE/<codepoint>.svg. Files
@@ -2302,23 +3248,68 @@ def fetch_kanjivg_all(characters, cache_dir, date, fetcher=fetch_kanjivg):
     for char in characters:
         path = day_dir / kanjivg_cache_filename(char)
         missing = path.with_suffix(".missing")
-        if missing.exists():
-            continue
         if path.exists():
             try:
-                out[char] = path.read_text(encoding="utf-8")
+                raw = _read_file_bytes_bounded(
+                    path, MAX_HTTP_RESPONSE_BYTES, "cached KanjiVG SVG"
+                )
+                svg = raw.decode("utf-8")
+                if parse_kanjivg(svg, char) is None:
+                    raise MalformedPayload("cached KanjiVG SVG does not match the character")
+                out[char] = svg
+                if consumed_sources is not None:
+                    record_consumed_source(
+                        consumed_sources,
+                        f"kanjivg-cache/{date}/{path.name}",
+                        raw,
+                        path=path,
+                        max_bytes=MAX_HTTP_RESPONSE_BYTES,
+                    )
+                missing.unlink(missing_ok=True)
                 continue
-            except OSError:
-                pass
+            except (OSError, UnicodeDecodeError, MalformedPayload):
+                path.unlink(missing_ok=True)
+                missing.unlink(missing_ok=True)
+        if missing.exists():
+            if consumed_sources is not None:
+                record_consumed_source(
+                    consumed_sources,
+                    f"kanjivg-cache/{date}/{missing.name}",
+                    b"",
+                    path=missing,
+                    max_bytes=0,
+                )
+            continue
         try:
             svg = fetcher(char)
         except NotFound:
             missing.touch()
+            if consumed_sources is not None:
+                record_consumed_source(
+                    consumed_sources,
+                    f"kanjivg-cache/{date}/{missing.name}",
+                    b"",
+                    path=missing,
+                    max_bytes=0,
+                )
             continue
+        if not isinstance(svg, str) or parse_kanjivg(svg, char) is None:
+            raise MalformedPayload("KanjiVG fetcher returned an invalid character SVG")
+        raw = svg.encode("utf-8")
+        if len(raw) > MAX_HTTP_RESPONSE_BYTES:
+            raise MalformedPayload("KanjiVG SVG exceeds the byte limit")
         tmp = path.with_suffix(".svg.tmp")
-        tmp.write_text(svg, encoding="utf-8")
+        tmp.write_bytes(raw)
         tmp.replace(path)
-        out[char] = svg
+        out[char] = raw.decode("utf-8")
+        if consumed_sources is not None:
+            record_consumed_source(
+                consumed_sources,
+                f"kanjivg-cache/{date}/{path.name}",
+                raw,
+                path=path,
+                max_bytes=MAX_HTTP_RESPONSE_BYTES,
+            )
     return out
 
 
@@ -2364,31 +3355,33 @@ def assemble_enrichment(svgs, ranks):
 # --- KANJIDIC2 static-source acquisition (once-per-day, resumable cache) ------
 
 KANJIDIC2_URL = "https://www.edrdg.org/kanjidic/kanjidic2.xml.gz"
+MAX_KANJIDIC2_COMPRESSED_BYTES = 64 * 1024 * 1024
+MAX_KANJIDIC2_XML_BYTES = 128 * 1024 * 1024
 
 
 def fetch_kanjidic2():
-    """Fetch and gunzip the static KANJIDIC2 XML from EDRDG (single request)."""
+    """Fetch and gunzip KANJIDIC2 with compressed and expanded size limits."""
     import gzip
 
-    req = urllib.request.Request(KANJIDIC2_URL, headers={"User-Agent": USER_AGENT})
-    last_err = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
-                return gzip.decompress(resp.read()).decode("utf-8")
-        except urllib.error.HTTPError as e:
-            if e.code == 429 or 500 <= e.code < 600:
-                last_err = e
-            else:
-                raise
-        except urllib.error.URLError as e:
-            last_err = e
-        if attempt < MAX_RETRIES:
-            time.sleep(2 ** attempt)
-    raise last_err if last_err is not None else RuntimeError("failed to GET KANJIDIC2")
+    compressed = http_get_bytes(
+        KANJIDIC2_URL, max_bytes=MAX_KANJIDIC2_COMPRESSED_BYTES
+    )
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed)) as archive:
+            raw = archive.read(MAX_KANJIDIC2_XML_BYTES + 1)
+    except (gzip.BadGzipFile, OSError) as exc:
+        raise MalformedPayload("KANJIDIC2 download is not valid gzip") from exc
+    if len(raw) > MAX_KANJIDIC2_XML_BYTES:
+        raise MalformedPayload("KANJIDIC2 XML exceeds the expanded byte limit")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise MalformedPayload("KANJIDIC2 XML is not valid UTF-8") from exc
 
 
-def fetch_kanjidic2_source(cache_dir, date, fetcher=fetch_kanjidic2):
+def fetch_kanjidic2_source(
+    cache_dir, date, fetcher=fetch_kanjidic2, consumed_sources=None
+):
     """Return the KANJIDIC2 XML for DATE, fetching the static source once a day.
 
     Mirrors the Jiten/KanjiVG resumable dated-cache flow: the decompressed XML
@@ -2402,21 +3395,51 @@ def fetch_kanjidic2_source(cache_dir, date, fetcher=fetch_kanjidic2):
     path = day_dir / "kanjidic2.xml"
     if path.exists():
         try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
+            raw = _read_file_bytes_bounded(
+                path, MAX_KANJIDIC2_XML_BYTES, "cached KANJIDIC2 XML"
+            )
+            text = raw.decode("utf-8")
+            if consumed_sources is not None:
+                record_consumed_source(
+                    consumed_sources,
+                    f"kanjidic2-cache/{date}/kanjidic2.xml",
+                    raw,
+                    path=path,
+                    max_bytes=MAX_KANJIDIC2_XML_BYTES,
+                )
+            return text
+        except (OSError, UnicodeDecodeError, MalformedPayload):
             pass
     xml_text = fetcher()
+    if not isinstance(xml_text, str):
+        raise MalformedPayload("KANJIDIC2 fetcher returned non-text data")
+    xml_bytes = xml_text.encode("utf-8")
+    if len(xml_bytes) > MAX_KANJIDIC2_XML_BYTES:
+        raise MalformedPayload("KANJIDIC2 XML exceeds the expanded byte limit")
     tmp = path.with_suffix(".xml.tmp")
-    tmp.write_text(xml_text, encoding="utf-8")
+    tmp.write_bytes(xml_bytes)
     tmp.replace(path)
-    return xml_text
+    if consumed_sources is not None:
+        record_consumed_source(
+            consumed_sources,
+            f"kanjidic2-cache/{date}/kanjidic2.xml",
+            xml_bytes,
+            path=path,
+            max_bytes=MAX_KANJIDIC2_XML_BYTES,
+        )
+    return xml_bytes.decode("utf-8")
 
 
 # --- Build pipeline and revision decision ------------------------------------
 
 def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
               kanjivg_cache_dir=None, kanjivg_fetcher=fetch_kanjivg,
-              kanjidic2_cache_dir=None, kanjidic2_fetcher=fetch_kanjidic2):
+              kanjidic2_cache_dir=None, kanjidic2_fetcher=fetch_kanjidic2,
+              frequency_cache_dir=None,
+              frequency_fetcher=fetch_jiten_global_frequency_csv,
+              enforce_frequency_quality=False,
+              frequency_offline=False,
+              consumed_sources=None):
     """Fetch (via cache) -> normalize -> merge -> enrich -> build banks + ZIP.
 
     Acquires Jiten payloads AND (when kanjivg_cache_dir is given) KanjiVG SVGs,
@@ -2431,7 +3454,53 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
     new revision. Returns {records, banks, enrichment, content_hash,
     zip_bytes(placeholder revision), source_counts}.
     """
-    payloads = fetch_all(characters, cache_dir, date, fetcher)
+    if consumed_sources is None:
+        consumed_sources = {}
+    payloads = fetch_all(
+        characters, cache_dir, date, fetcher, consumed_sources=consumed_sources
+    )
+    frequency_scores = {}
+    frequency_stats = {}
+    frequency_source = None
+    if frequency_cache_dir is not None:
+        frequency_source = acquire_jiten_frequency_csv_source(
+            frequency_cache_dir, date, frequency_fetcher, offline=frequency_offline
+        )
+        record_consumed_source(
+            consumed_sources,
+            f"jiten-frequency-cache/{date}/jiten_freq_global.csv",
+            frequency_source.raw,
+            max_bytes=MAX_JITEN_FREQUENCY_BYTES,
+        )
+        frequency_rows, parse_stats = parse_jiten_frequency_csv_with_stats(
+            frequency_source.text
+        )
+        frequency_scores, alignment_stats = (
+            _calculate_reading_frequency_scores_with_stats(payloads, frequency_rows)
+        )
+        frequency_stats = {**parse_stats, **alignment_stats}
+        frequency_stats["byteCount"] = len(frequency_source.raw)
+        frequency_stats["sha256"] = frequency_source.sha256
+        frequency_stats["url"] = JITEN_FREQUENCY_CSV_URL
+        frequency_stats["retrievedDate"] = date
+        frequency_stats["schema"] = "Word,Form,Rank"
+        frequency_stats["algorithm"] = (
+            "jiten-kanji-rank-weight-v1+bees-kanjidic-unique-alignment-v1"
+        )
+        frequency_stats["metric"] = (
+            "normalized sum of inverse-square-root Jiten Global ranks; "
+            "ranks above 100000 receive an additional quadratic tail penalty"
+        )
+        try:
+            if frequency_stats.get("alignedRows", 0) <= 0 or not frequency_scores:
+                raise MalformedPayload(
+                    "Jiten frequency CSV produced no aligned reading scores"
+                )
+            if enforce_frequency_quality:
+                validate_jiten_frequency_coverage(frequency_stats)
+        except MalformedPayload:
+            _quarantine_jiten_frequency_snapshot(frequency_source)
+            raise
     records = []
     for char in characters:
         payload = payloads.get(char)
@@ -2444,6 +3513,8 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
             record = normalize_record(payload)
         except MalformedPayload:
             continue  # skip characters whose payload cannot be trusted
+        if frequency_cache_dir is not None:
+            record["reading_frequency_scores"] = frequency_scores.get(char, [])
         if record["frequency_rank"] is not None and record["frequency_rank"] <= 1000:
             example_count = sum(len(group["words"]) for group in record["examples"])
             if not record["keyword"] or not (record["on"] or record["kun"]) or example_count < 1:
@@ -2452,7 +3523,12 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
 
     jiten_count = len(records)
     if kanjidic2_cache_dir:
-        xml_text = fetch_kanjidic2_source(kanjidic2_cache_dir, date, kanjidic2_fetcher)
+        xml_text = fetch_kanjidic2_source(
+            kanjidic2_cache_dir,
+            date,
+            kanjidic2_fetcher,
+            consumed_sources=consumed_sources,
+        )
         kd2_index = parse_kanjidic2(xml_text)
         records = merge_kanjidic2(records, kd2_index)
     kanjidic2_count = len(records) - jiten_count
@@ -2461,24 +3537,33 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
     enrichment = {"strokes": {}, "families": {}, "families_by_char": {}, "assets": {}}
     if kanjivg_cache_dir:
         present = [r["character"] for r in records]
-        svgs = fetch_kanjivg_all(present, kanjivg_cache_dir, date, kanjivg_fetcher)
+        svgs = fetch_kanjivg_all(
+            present,
+            kanjivg_cache_dir,
+            date,
+            kanjivg_fetcher,
+            consumed_sources=consumed_sources,
+        )
         enrichment = assemble_enrichment(svgs, ranks)
+    kanjivg_asset_count = len(enrichment["assets"])
 
-    # Generate the per-entry reading-distribution PNG media for every record
-    # that carries a truthful Jiten reading total, and bundle each as a packaged
-    # asset the term card references by path. Records without a distribution
-    # (KANJIDIC2-only fallbacks) get no chart and no asset -- never faked.
+    # Package only the rank-derived chart referenced by structured content.
+    # Entry-count reading distributions are never a production fallback.
+    frequency_asset_count = 0
     for r in records:
-        png = build_reading_distribution_png(r)
-        if png is not None:
-            enrichment["assets"][reading_distribution_asset_name(r["character"])] = png
+        frequency_png = build_reading_frequency_png(r)
+        if frequency_png is not None:
+            enrichment["assets"][reading_frequency_asset_name(r["character"])] = frequency_png
+            frequency_asset_count += 1
+    if frequency_stats is not None:
+        frequency_stats["chartAssets"] = frequency_asset_count
 
     banks = build_banks(records, aliases or {}, enrichment=enrichment)
     source_counts = {"jiten": jiten_count, "kanjidic2": kanjidic2_count}
     enrichment_counts = {
         "strokes": len(enrichment["strokes"]),
         "families": len(enrichment["families"]),
-        "assets": len(enrichment["assets"]),
+        "assets": kanjivg_asset_count,
     }
     chash = content_hash(
         banks,
@@ -2486,6 +3571,7 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         source_counts=source_counts,
         enrichment_counts=enrichment_counts,
         sitemap_size=len(characters),
+        frequency_stats=frequency_stats,
     )
     return {
         "records": records,
@@ -2493,6 +3579,10 @@ def run_build(characters, cache_dir, date, aliases=None, fetcher=fetch_kanji,
         "enrichment": enrichment,
         "content_hash": chash,
         "source_counts": source_counts,
+        "enrichment_counts": enrichment_counts,
+        "frequency_stats": frequency_stats,
+        "frequency_source": frequency_source,
+        "consumed_sources": consumed_sources,
         "zip_bytes": build_zip(banks, date_to_revision(date), enrichment.get("assets")),
     }
 
@@ -2537,7 +3627,7 @@ def _load_previous(dist_index_path):
     if idx.exists():
         try:
             prev_rev = json.loads(idx.read_text(encoding="utf-8")).get("revision")
-        except (ValueError, OSError):
+        except (ValueError, OSError, UnicodeDecodeError, MalformedPayload):
             prev_rev = None
     prev_hash = None
     hpath = idx.with_name("content.sha256")
@@ -2587,24 +3677,37 @@ def main(argv=None):
     parser.add_argument("--out", default="build")
     parser.add_argument("--dist", default="dist")
     parser.add_argument("--date", default=None, help="UTC date YYYY-MM-DD (default: today)")
+    parser.add_argument(
+        "--revision",
+        default=None,
+        help="fresh preflight-selected YYYY.MM.DD[.N] revision for changed content",
+    )
     parser.add_argument("--limit", type=int, default=None, help="limit characters (debug)")
     parser.add_argument("--offline", action="store_true", help="use cache only; no network")
     parser.add_argument("--no-kanjivg", action="store_true",
                         help="skip KanjiVG acquisition/enrichment (data-only build)")
     parser.add_argument("--kanjidic2-cache", default="kanjidic2-cache",
                         help="dated cache dir for the static KANJIDIC2 XML source")
+    parser.add_argument("--frequency-cache", default="jiten-frequency-cache",
+                        help="dated cache dir for Jiten's bulk Global frequency CSV")
     parser.add_argument("--no-kanjidic2", action="store_true",
                         help="skip KANJIDIC2 fallback (Jiten-only build)")
     args = parser.parse_args(argv)
 
-    date = args.date or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    date = args.date or datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
     out_dir = _pl.Path(args.out)
     dist_dir = _pl.Path(args.dist)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"[build] date={date}")
-    characters = fetch_sitemap_cached(args.cache, date, offline=args.offline)
+    consumed_sources = {}
+    characters = fetch_sitemap_cached(
+        args.cache,
+        date,
+        offline=args.offline,
+        consumed_sources=consumed_sources,
+    )
     if args.limit:
         characters = characters[: args.limit]
     print(f"[build] {len(characters)} characters from sitemap")
@@ -2618,12 +3721,25 @@ def main(argv=None):
     kd2_fetcher = (
         _offline_kanjidic2_fetcher(args.kanjidic2_cache, date) if args.offline else fetch_kanjidic2
     )
+    frequency_fetcher = (
+        _offline_jiten_frequency_fetcher(args.frequency_cache, date)
+        if args.offline else fetch_jiten_global_frequency_csv
+    )
     result = run_build(
         characters, args.cache, date, DEFAULT_ALIASES, fetcher,
         kanjivg_cache_dir=kanjivg_cache, kanjivg_fetcher=kvg_fetcher,
         kanjidic2_cache_dir=kanjidic2_cache, kanjidic2_fetcher=kd2_fetcher,
+        frequency_cache_dir=args.frequency_cache,
+        frequency_fetcher=frequency_fetcher,
+        enforce_frequency_quality=args.limit is None,
+        frequency_offline=args.offline,
+        consumed_sources=consumed_sources,
     )
     enr = result["enrichment"]
+    if args.limit is None and not args.no_kanjivg:
+        validate_kanjivg_coverage(
+            len(enr["strokes"]), cache_dir=args.kanjivg_cache, date=date
+        )
     sc = result.get("source_counts", {"jiten": len(result["records"]), "kanjidic2": 0})
     print(
         f"[build] {len(result['records'])} clean records "
@@ -2631,25 +3747,54 @@ def main(argv=None):
         f"{len(enr['strokes'])} stroke sets; {len(enr['families'])} phonetic families; "
         f"hash={result['content_hash'][:12]}"
     )
+    fs = result.get("frequency_stats") or {}
+    if fs:
+        print(
+            "[frequency] "
+            f"{fs.get('alignedRows', 0)}/{fs.get('relevantRows', 0)} rows aligned; "
+            f"{float(fs.get('rankWeightCoverage', 0.0)):.1%} rank-weight coverage"
+        )
 
     prev_rev, prev_hash = _load_previous(dist_dir / "index.json")
     revision = decide_revision(result["content_hash"], prev_hash, date, prev_rev)
     if revision is None:
         print("[build] content unchanged; nothing to publish")
         return 0
+    if args.revision is not None:
+        base = date_to_revision(date)
+        if not re.fullmatch(re.escape(base) + r"(?:\.[0-9]+)?", args.revision):
+            raise SystemExit("--revision must be a fresh revision for the resolved date")
+        revision = args.revision
+
+    frequency_source = result.get("frequency_source")
+    if frequency_source is None:
+        raise SystemExit("build did not carry its scored Jiten frequency snapshot")
+    source_snapshot_bytes = None
+    source_lock = None
+    source_snapshot_meta = None
+    if args.limit is None and not args.no_kanjivg and not args.no_kanjidic2:
+        source_snapshot_bytes, source_lock = build_source_snapshot(
+            date=date,
+            consumed_sources=result["consumed_sources"],
+        )
+        source_lock_bytes = dump_json(source_lock).encode("utf-8")
+        source_snapshot_meta = {
+            "sha256": hashlib.sha256(source_snapshot_bytes).hexdigest(),
+            "byteCount": len(source_snapshot_bytes),
+            "lockSha256": hashlib.sha256(source_lock_bytes).hexdigest(),
+            "fileCount": len(source_lock["files"]),
+        }
 
     manifest = build_manifest(
         revision=revision,
         content_hash=result["content_hash"],
         date=date,
         source_counts=sc,
-        enrichment_counts={
-            "strokes": len(enr["strokes"]),
-            "families": len(enr["families"]),
-            "assets": len(enr.get("assets") or {}),
-        },
+        enrichment_counts=result["enrichment_counts"],
         sitemap_size=len(characters),
         code_revision=_code_revision(),
+        frequency_stats=result.get("frequency_stats") or None,
+        source_snapshot=source_snapshot_meta,
     )
 
     zip_bytes = build_zip(result["banks"], revision, enr.get("assets"), manifest=manifest)
@@ -2662,10 +3807,31 @@ def main(argv=None):
     (out_dir / "MANIFEST.json").write_text(manifest_text, encoding="utf-8")
     manifest_digest = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
 
+    frequency_source_bytes = frequency_source.raw
+    frequency_digest = frequency_source.sha256
+    if frequency_digest != manifest["sources"]["jitenGlobalFrequency"]["sha256"]:
+        raise SystemExit("Jiten frequency source digest differs from scored snapshot")
+    (out_dir / JITEN_FREQUENCY_ASSET_NAME).write_bytes(frequency_source_bytes)
+
+    extra_checksum_lines = []
+    if source_snapshot_bytes is not None and source_lock is not None:
+        source_lock_bytes = dump_json(source_lock).encode("utf-8")
+        (out_dir / SOURCE_SNAPSHOT_NAME).write_bytes(source_snapshot_bytes)
+        (out_dir / SOURCE_LOCK_NAME).write_bytes(source_lock_bytes)
+        extra_checksum_lines.extend((
+            f"{hashlib.sha256(source_snapshot_bytes).hexdigest()}  {SOURCE_SNAPSHOT_NAME}",
+            f"{hashlib.sha256(source_lock_bytes).hexdigest()}  {SOURCE_LOCK_NAME}",
+        ))
+
     digest = hashlib.sha256(zip_bytes).hexdigest()
+    checksum_lines = [
+        f"{digest}  {ZIP_NAME}",
+        f"{manifest_digest}  MANIFEST.json",
+        f"{frequency_digest}  {JITEN_FREQUENCY_ASSET_NAME}",
+        *extra_checksum_lines,
+    ]
     (out_dir / "SHA256SUMS").write_text(
-        f"{digest}  {ZIP_NAME}\n{manifest_digest}  MANIFEST.json\n",
-        encoding="utf-8",
+        "\n".join(checksum_lines) + "\n", encoding="utf-8"
     )
 
     (dist_dir / "index.json").write_text(
@@ -2694,7 +3860,9 @@ def _offline_fetcher(cache_dir, date):
         path = day / cache_filename(char)
         if not path.exists():
             raise NotFound(char)
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(_read_file_bytes_bounded(
+            path, MAX_HTTP_RESPONSE_BYTES, "cached Jiten kanji payload"
+        ).decode("utf-8"))
 
     return fetcher
 
@@ -2709,7 +3877,9 @@ def _offline_kanjivg_fetcher(cache_dir, date):
         path = day / kanjivg_cache_filename(char)
         if not path.exists():
             raise NotFound(char)
-        return path.read_text(encoding="utf-8")
+        return _read_file_bytes_bounded(
+            path, MAX_HTTP_RESPONSE_BYTES, "cached KanjiVG SVG"
+        ).decode("utf-8")
 
     return fetcher
 
@@ -2724,7 +3894,26 @@ def _offline_kanjidic2_fetcher(cache_dir, date):
         path = day / "kanjidic2.xml"
         if not path.exists():
             raise FileNotFoundError(f"KANJIDIC2 cache missing: {path}")
-        return path.read_text(encoding="utf-8")
+        return _read_file_bytes_bounded(
+            path, MAX_KANJIDIC2_XML_BYTES, "cached KANJIDIC2 XML"
+        ).decode("utf-8")
+
+    return fetcher
+
+
+
+def _offline_jiten_frequency_fetcher(cache_dir, date):
+    """Return a fetcher that fails closed outside the dated bulk CSV cache."""
+    import pathlib as _pl
+
+    path = _pl.Path(cache_dir) / date / "jiten_freq_global.csv"
+
+    def fetcher():
+        if not path.exists():
+            raise FileNotFoundError(f"Jiten frequency CSV cache missing: {path}")
+        return _read_file_bytes_bounded(
+            path, MAX_JITEN_FREQUENCY_BYTES, "cached Jiten frequency CSV"
+        )
 
     return fetcher
 

@@ -16,7 +16,16 @@ FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 
 
 def rec(name):
-    return bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record = bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record["reading_frequency_scores"] = [
+        {
+            "reading": item["reading"],
+            "score": 1.0 / (index + 1),
+            "reading_class": item["reading_class"],
+        }
+        for index, item in enumerate(record["reading_entry_counts"])
+    ]
+    return record
 
 
 def _walk(node):

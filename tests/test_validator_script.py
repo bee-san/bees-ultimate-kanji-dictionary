@@ -10,6 +10,7 @@ import shutil
 import subprocess
 
 import pytest
+
 import bees_kanji as bk
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -26,16 +27,25 @@ def _banks():
 
 
 def _chart_assets():
-    """The per-entry reading-distribution PNG charts every card references."""
+    """Production-shaped Frequency weight PNGs every scored card references."""
     recs = [
         bk.normalize_record(json.loads((FIX / f"{c}.json").read_text(encoding="utf-8")))
         for c in CHARS
     ]
     assets = {}
     for r in recs:
-        png = bk.build_reading_distribution_png(r)
+        labels = r["reading_entry_counts"][:2]
+        r["reading_frequency_scores"] = [
+            {
+                "reading": item["reading"],
+                "score": score,
+                "reading_class": item["reading_class"],
+            }
+            for item, score in zip(labels, (4.0, 1.0))
+        ]
+        png = bk.build_reading_frequency_png(r)
         if png is not None:
-            assets[bk.reading_distribution_asset_name(r["character"])] = png
+            assets[bk.reading_frequency_asset_name(r["character"])] = png
     return assets
 
 
@@ -56,11 +66,20 @@ def _enriched():
     svgs["場"] = _fake_kvg("場", "\u661c")
     svgs["生"] = _fake_kvg("生", "\u661c")
     enr = bk.assemble_enrichment(svgs, ranks)
-    # bundle the per-entry reading-distribution PNG charts too (as run_build does)
+    # Bundle production-shaped Frequency weight PNGs too (as run_build does).
     for r in recs:
-        png = bk.build_reading_distribution_png(r)
+        labels = r["reading_entry_counts"][:2]
+        r["reading_frequency_scores"] = [
+            {
+                "reading": item["reading"],
+                "score": score,
+                "reading_class": item["reading_class"],
+            }
+            for item, score in zip(labels, (4.0, 1.0))
+        ]
+        png = bk.build_reading_frequency_png(r)
         if png is not None:
-            enr["assets"][bk.reading_distribution_asset_name(r["character"])] = png
+            enr["assets"][bk.reading_frequency_asset_name(r["character"])] = png
     banks = bk.build_banks(recs, {"髙": "高"}, enrichment=enr)
     return banks, enr
 
@@ -84,9 +103,11 @@ def test_node_validator_accepts_built_zip(tmp_path):
     proc = subprocess.run(
         ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
         capture_output=True, text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "Yomitan validation passed" in proc.stdout
+    assert any(name.startswith("reading-frequency/") for name in _chart_assets())
 
 
 def test_node_validator_accepts_enriched_zip_with_assets(tmp_path):
@@ -102,6 +123,7 @@ def test_node_validator_accepts_enriched_zip_with_assets(tmp_path):
     proc = subprocess.run(
         ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
         capture_output=True, text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "referenced img assets all resolve" in proc.stdout

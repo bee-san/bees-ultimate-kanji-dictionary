@@ -35,23 +35,17 @@ def test_term_bank_entry_shape_for_ba():
     assert entry[6] == ord("場")     # sequence = code point
 
 
-def test_term_detail_uses_full_jiten_reading_share_denominator():
+def test_term_detail_never_relabels_entry_counts_as_frequency():
     r = rec("場.json")
     entry = bk.build_term_entry(r)
     blob = json.dumps(entry, ensure_ascii=False)
     # Raw Jiten key names and counts must never leak into the card.
     assert "totalWords" not in blob and "total_words" not in blob
-    # The donut is a share of Jiten vocabulary ENTRIES computed over the full
-    # group totals (denominator 4988), NOT the 1-2 shown example words.
-    dist = bk.reading_distribution(r)
-    assert dist["total"] == 4988
-    assert sum(s["count"] for s in dist["segments"]) == 4988
-    # Every percentage is visible, while raw counts stay out of the card.
-    for seg in dist["segments"]:
-        assert f"{seg['percent']}%" in blob
-        assert f"{seg['count']:,} entries" not in blob
-    assert "Reading distribution" in blob
-    assert "Counts distinct Jiten vocabulary" not in blob
+    # Entry totals cannot create the production Frequency weight chart without
+    # the validated bulk rank join.
+    assert r["reading_frequency_scores"] == []
+    assert "Frequency weight" not in blob
+    assert "reading-distribution/" not in blob
 
 
 def test_kanji_bank_entry_shape_for_ba():

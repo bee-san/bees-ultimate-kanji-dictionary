@@ -129,6 +129,19 @@ def test_stroke_node_preserves_baked_high_contrast_colours_in_yomitan():
     assert "appearance" not in image
 
 
+def test_stroke_node_pins_real_yomitan_media_size():
+    info = {"stroke_count": 5, "components": ["生"], "asset": "kanjivg/0751f.svg"}
+    node = bk.build_stroke_node("生", info)
+    assert node is not None
+    image = node["content"][0]
+
+    assert image["width"] == 6
+    assert image["height"] == 6
+    assert image["sizeUnits"] == "em"
+    assert image["collapsed"] is False
+    assert image["collapsible"] is False
+
+
 def test_stroke_node_text_only_when_no_asset():
     # When no SVG asset is available, still show a text component/stroke line.
     info = {"stroke_count": 5, "components": ["\u751f"], "asset": None}
