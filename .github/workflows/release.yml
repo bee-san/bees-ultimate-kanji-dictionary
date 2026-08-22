@@ -55,8 +55,9 @@ jobs:
 
       - name: Configure credential-free public origin
         run: |
-          git config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
-          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
@@ -278,8 +279,9 @@ jobs:
 
       - name: Configure credential-free public origin
         run: |
-          git config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
-          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -445,8 +447,9 @@ jobs:
 
       - name: Configure credential-free public origin
         run: |
-          git config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
-          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 
       - name: Verify immutable release and safely finish its exact updater commit
         env:
@@ -506,8 +509,9 @@ jobs:
 
       - name: Configure credential-free public origin
         run: |
-          git config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
-          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.url "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$GITHUB_WORKSPACE" config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 
       - name: Require a complete immutable release matching the updater
         env:
