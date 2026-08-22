@@ -20,12 +20,12 @@ full visual acceptance inventory lives in
 
 | Enriched entry (生) | Expanded details (生) | Narrow entry (場) |
 | :---: | :---: | :---: |
-| ![Real Yomitan search result for the kanji 生, showing the keyword "life", top reading chips, meanings, the coloured reading-share pie chart with its percentage legend, and common vocabulary.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry with its secondary reading, metadata, and vocabulary disclosures expanded below the visible reading-share pie chart.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 300px card, showing a compact reading-share pie chart and legend above vocabulary, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
+| ![Real Yomitan search result for the kanji 生, showing the keyword "life", top reading chips, meanings, the coloured Frequency weight pie with its percentage legend, and common vocabulary.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry with its complete On and Kun readings expanded below the visible Frequency weight pie.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 380px official-Yomitan viewport, showing a compact Frequency weight pie to the left of its legend above vocabulary, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
 
 The KANJIDIC2 fallback is deliberately plain — no invented pie chart, ranks, or
 examples:
 
-![Real Yomitan search result for the KANJIDIC2-only fallback kanji 㐆, showing only the keyword, English meanings, and the stroke count, with no reading-share pie chart and no example vocabulary.](docs/images/real-yomitan/kanjidic2-fallback-compact-light.png)
+![Real Yomitan search result for the KANJIDIC2-only fallback kanji 㐆, showing only the keyword, English meanings, and the stroke count, with no Frequency weight pie and no example vocabulary.](docs/images/real-yomitan/kanjidic2-fallback-compact-light.png)
 
 ## Install
 
@@ -39,9 +39,9 @@ examples:
 - Jiten meanings, on/kun readings, frequency ranks, and common vocabulary
   examples grouped by reading (On / Kun / Other), chosen by Jiten rank and
   rendered with furigana.
-- A **reading distribution** pie chart with a visible percentage legend. Each
-  percentage is calculated from distinct Jiten vocabulary entries for that
-  reading; the raw counts stay out of the card to keep it clean.
+- A compact **Frequency weight** pie with a visible percentage legend. The build
+  joins Jiten's downloadable Global `Word,Form,Rank` CSV to Jiten's kanji-reading
+  groups locally, so the daily release needs no per-word API crawl.
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
@@ -68,23 +68,47 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
 - **English only.** Glosses and meanings are English.
 - **Kanji-focused, not a full word dictionary.** Each character ships as a
   single structured **term** entry — that rich card (readings, meanings,
-  vocabulary, and the reading-share pie chart) is what you see when you scan/hover
+  vocabulary, and the Frequency weight pie) is what you see when you scan/hover
   or search the character, the ordinary lookup path. It is not a general JMdict
   vocabulary dictionary.
 - **One canonical surface, no native kanji card.** The package deliberately
   ships no native `kanji_bank`. Yomitan's separate "view kanji" drilldown (the
   `type=kanji` link) routes only to Yomitan's built-in flat kanji renderer,
-  which dictionary CSS cannot style and which would hide the reading-share
+  which dictionary CSS cannot style and which would hide the Frequency weight
   pie chart. With no kanji dictionary shipped, that secondary drilldown simply
   reports "no results"; the full rich card is always delivered through the
   ordinary term lookup instead.
 - **No audio and no pitch accent.**
-- **Source freshness is once per UTC day.** Jiten, KANJIDIC2, and KanjiVG are
-  fetched at most once daily; a release appears only when normalized content
-  changes.
+- **Source freshness is once per UTC day.** Jiten's kanji data and bulk Global
+  frequency CSV, KANJIDIC2, and KanjiVG are fetched at most once daily; a release
+  appears only when normalized content changes.
 - **KANJIDIC2 fallback entries are plain** (meanings, on/kun, stroke count,
-  grade/JLPT) with no examples, no frequency rank, and no reading-share pie chart.
-- **Reading distribution** is omitted when Jiten has no per-reading counts.
+  grade/JLPT) with no examples, no frequency rank, and no Frequency weight pie.
+- **Frequency weight is rank-derived, not corpus probability.** Canonically
+  equivalent duplicate Global CSV triples are collapsed; any canonical
+  `Word,Form` pair exported with conflicting ranks is excluded rather than
+  guessed. An isolated kanji may use its curated
+  Jiten reading-group labels, while a multi-kanji run is restricted to
+  KANJIDIC-derived on/kun stems plus rendaku, handakuten, and gemination variants. Only
+  one complete unambiguous segmentation is accepted. Rank `r` then contributes
+  `1/sqrt(r)`; ranks above 100,000 receive the additional tail factor
+  `(100000/r)^2`. Reading totals are normalized to the displayed percentages.
+  This CSV-only adaptation omits Jiten's SQL fallback rank for forms absent from
+  the export and does not apply Jiten's later 3% pruning/renormalization stage.
+  These are matched-form rank-score shares, never observed usage probabilities.
+- **Releases pin every build source.** `jiten-global-frequency.csv` is published
+  directly, while `source-snapshot.zip` retains the exact dated Jiten payloads,
+  sitemap, KANJIDIC2 XML, and pinned-revision KanjiVG files used by the build.
+  `SOURCE-LOCK.json` records each member's size and SHA-256. Offline replay
+  requires an exact canonical inventory, regular-file modes, and every locked
+  size and digest before the verified snapshot is installed. All derived and
+  retained-source assets are covered by `SHA256SUMS`; parser exclusions,
+  alignment coverage, algorithm IDs, source revisions, and licences are recorded
+  in `MANIFEST.json`. Production builds also require at least 6,000 valid
+  KanjiVG stroke sets so stale negative-cache markers cannot silently strip a
+  large share of the learning-aid media.
+- **Frequency weight is omitted** when no bulk row can be uniquely attributed to
+  a reading; entry counts are never relabelled as frequency.
 
 ## Build and test
 
@@ -105,9 +129,10 @@ Generator code is MIT (see `LICENSE`).
 
 Dictionary **data** is redistributed under CC BY-SA 4.0:
 
-> Dictionary data derived from Jiten (https://jiten.moe) and directly from
-> KANJIDIC2, using JMdict/KANJIDIC data from the Electronic Dictionary Research
-> and Development Group (EDRDG). Redistributed under CC BY-SA 4.0; see
+> Dictionary data derived from Jiten (https://jiten.moe), including its Global
+> frequency-list CSV, and directly from KANJIDIC2, using JMdict/KANJIDIC data
+> from the Electronic Dictionary Research and Development Group (EDRDG). Data
+> and the documented rank-weight adaptation are redistributed under CC BY-SA 4.0; see
 > https://creativecommons.org/licenses/by-sa/4.0/ and
 > https://www.edrdg.org/edrdg/licence.html.
 

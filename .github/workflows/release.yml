@@ -1,259 +1,531 @@
 name: release
 
-# One acquisition per UTC day. Also runnable on demand for verification.
 on:
   schedule:
-    - cron: "17 3 * * *"   # daily, 03:17 UTC
+    - cron: "17 3 * * *"
   workflow_dispatch: {}
 
 permissions:
-  contents: write          # commit dist/index.json + publish releases
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  PYTHONHASHSEED: "0"
+  TZ: UTC
+  LC_ALL: C.UTF-8
+  SOURCE_DATE_EPOCH: "0"
+  PYTHONPATH: src
+
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  guard:
+    runs-on: ubuntu-24.04
+    outputs:
+      date: ${{ steps.date.outputs.date }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.11"
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "20"
-
-      - name: Resolve UTC acquisition date
+      - name: Restrict manual publication to main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "workflow_dispatch releases may run only from refs/heads/main" >&2
+          exit 1
+      - name: Resolve the one UTC acquisition date
         id: date
         run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
-      - name: Restore same-day acquisition cache
-        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+  build:
+    needs: guard
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    container:
+      image: python:3.11.15-bookworm@sha256:a8f8fbe1a0edc9e4dddafa64ba73f7e04be7be5ebc23f332362e779e0a2e4e52
+    outputs:
+      changed: ${{ steps.build.outputs.changed }}
+      candidate_revision: ${{ steps.preflight.outputs.candidate_revision }}
+      recovery_tag: ${{ steps.preflight.outputs.recovery_tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          version: "0.11.28"
+          enable-cache: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.23.1"
+          cache: npm
+
+      - name: Restore resumable exact-date source cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cache/
             kanjivg-cache/
             kanjidic2-cache/
-          key: daily-cache-v1-${{ steps.date.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: daily-cache-v1-${{ steps.date.outputs.date }}-
+            jiten-frequency-cache/
+          key: daily-cache-v3-${{ needs.guard.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: daily-cache-v3-${{ needs.guard.outputs.date }}-
 
-      - name: Install dependencies
+      - name: Install the locked build and validation environment
         run: |
-          python -m pip install --upgrade pip
-          pip install -e . pytest==9.1.1
+          uv sync --frozen --all-groups
           npm ci
+          npm audit --omit=dev
+          python --version
+          uv --version
+          node --version
 
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Run complete tests
+        run: .venv/bin/python -m pytest -q
 
-      - name: Build dictionary
+      - name: Inspect remote state without mutation and select a fresh coordinate
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+        run: |
+          python scripts/release_preflight.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$GITHUB_SHA" \
+            --date "$BUILD_DATE" \
+            --dist dist \
+            --output "$GITHUB_OUTPUT"
+
+      - name: Build exact online candidate
         id: build
         env:
-          GH_TOKEN: ${{ github.token }}
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          CANDIDATE_REVISION: ${{ steps.preflight.outputs.candidate_revision }}
+          FORCE_FRESH: ${{ steps.preflight.outputs.force_fresh }}
         run: |
-          revision="$(python -c 'import json;print(json.load(open("dist/index.json"))["revision"])')"
-          release_tag="v$revision"
-          release_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
-          release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag" 2>/dev/null || true)"
-          latest_tag="$(gh api --jq .tag_name "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
-          asset_names="$(gh release view "$release_tag" --json assets --jq '[.assets[].name] | sort | join(" ")' 2>/dev/null || true)"
-          force_fresh=false
-          if [ -z "$release_draft" ]; then
-            force_fresh=true
-          elif [ "$release_draft" = "true" ]; then
-            gh release delete "$release_tag" --yes --cleanup-tag
-            force_fresh=true
-          elif [ "$release_draft" = "false" ] && { [ "$release_immutable" != "true" ] || [ "$latest_tag" != "$release_tag" ] || [ "$asset_names" != "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip" ]; }; then
-            force_fresh=true
+          rm -rf build replay-build replay-dist replay-source baseline-dist candidate
+          cp -a dist baseline-dist
+          if [ "$FORCE_FRESH" = "true" ]; then
+            rm -f dist/content.sha256 baseline-dist/content.sha256
           fi
-          if [ "$force_fresh" = "true" ]; then
-            # Never trust bytes or checksums from a mutable/draft release. Removing
-            # only the comparison hash forces a fresh revision from cached sources.
-            rm -f dist/content.sha256
+          .venv/bin/python -m bees_kanji \
+            --cache cache \
+            --kanjivg-cache kanjivg-cache \
+            --kanjidic2-cache kanjidic2-cache \
+            --frequency-cache jiten-frequency-cache \
+            --out build \
+            --dist dist \
+            --date "$BUILD_DATE" \
+            --revision "$CANDIDATE_REVISION"
+          if [ -f build/bees-ultimate-kanji-dictionary.zip ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-          python -m bees_kanji --cache cache --out build --dist dist
-          echo "recovery=false" >> "$GITHUB_OUTPUT"
 
-      - name: Save resumable acquisition cache
+      - name: Save resumable exact-date source cache
         if: always()
-        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             cache/
             kanjivg-cache/
             kanjidic2-cache/
-          key: daily-cache-v1-${{ steps.date.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
+            jiten-frequency-cache/
+          key: daily-cache-v3-${{ needs.guard.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Check for a new release
-        id: check
+      - name: Rebuild offline only from the released source snapshot
+        if: steps.build.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          CANDIDATE_REVISION: ${{ steps.preflight.outputs.candidate_revision }}
         run: |
-          if [ -f build/bees-ultimate-kanji-dictionary.zip ]; then
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-            echo "recovery=${{ steps.build.outputs.recovery }}" >> "$GITHUB_OUTPUT"
-            echo "revision=$(python -c 'import json;print(json.load(open("dist/index.json"))["revision"])')" >> "$GITHUB_OUTPUT"
-          else
-            revision="$(python -c 'import json;print(json.load(open("dist/index.json"))["revision"])')"
-            release_tag="v$revision"
-            release_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
-            remote_tag_commit="$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)"
-            release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag" 2>/dev/null || true)"
-            latest_tag="$(gh api --jq .tag_name "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
-            asset_names="$(gh release view "$release_tag" --json assets --jq '[.assets[].name] | sort | join(" ")' 2>/dev/null || true)"
-            test "$release_draft" = "false"
-            test "$release_immutable" = "true"
-            test "$latest_tag" = "$release_tag"
-            test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"
-            mkdir -p verify-existing
-            gh release download "$release_tag" --pattern MANIFEST.json --dir verify-existing
-            manifest_code_revision="$(python -c 'import json;print(json.load(open("verify-existing/MANIFEST.json"))["codeRevision"])')"
-            manifest_revision="$(python -c 'import json;print(json.load(open("verify-existing/MANIFEST.json"))["revision"])')"
-            test "$remote_tag_commit" = "$manifest_code_revision"
-            test "$manifest_revision" = "$revision"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "recovery=false" >> "$GITHUB_OUTPUT"
-            echo "No content change; nothing to publish."
-          fi
+          .venv/bin/python scripts/verify_source_snapshot.py \
+            build/source-snapshot.zip build/SOURCE-LOCK.json replay-source
+          cp -a baseline-dist replay-dist
+          .venv/bin/python -m bees_kanji \
+            --cache replay-source/cache \
+            --kanjivg-cache replay-source/kanjivg-cache \
+            --kanjidic2-cache replay-source/kanjidic2-cache \
+            --frequency-cache replay-source/jiten-frequency-cache \
+            --out replay-build \
+            --dist replay-dist \
+            --date "$BUILD_DATE" \
+            --revision "$CANDIDATE_REVISION" \
+            --offline
+          for asset in \
+            bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS \
+            jiten-global-frequency.csv source-snapshot.zip SOURCE-LOCK.json; do
+            cmp "build/$asset" "replay-build/$asset"
+          done
+          cmp dist/index.json replay-dist/index.json
+          cmp dist/content.sha256 replay-dist/content.sha256
 
-      - name: Prepare updater commit
-        if: steps.check.outputs.publish == 'true'
+      - name: Prepare deterministic updater commit
+        if: steps.build.outputs.changed == 'true'
+        id: commit
+        env:
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "Bee release bot"
+          git config user.email "release-bot@users.noreply.github.com"
           git add dist/index.json dist/content.sha256
-          if ! git diff --cached --quiet; then
-            export GIT_AUTHOR_DATE="${{ steps.date.outputs.date }}T00:00:00Z"
-            export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
-            git commit -m "chore: publish revision ${{ steps.check.outputs.revision }}"
-          fi
+          test -n "$(git diff --cached --name-only)"
+          export GIT_AUTHOR_DATE="${BUILD_DATE}T00:00:00Z"
+          export GIT_COMMITTER_DATE="${BUILD_DATE}T00:00:00Z"
+          git commit -m "Update dictionary release metadata"
+          final_commit="$(git rev-parse HEAD)"
+          echo "final_commit=$final_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Bind artifacts to final commit
-        if: steps.check.outputs.publish == 'true'
-        run: |
-          expected_commit="$(git rev-parse HEAD)"
-          python -c 'import pathlib,sys; from bees_kanji import bind_release_artifacts_to_code_revision; bind_release_artifacts_to_code_revision(pathlib.Path("build"), sys.argv[1])' "$expected_commit"
-
-      - name: Publish release
-        if: steps.check.outputs.publish == 'true'
+      - name: Independently bind both candidates to the exact updater commit
+        if: steps.build.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+          CANDIDATE_REVISION: ${{ steps.preflight.outputs.candidate_revision }}
         run: |
-          release_tag="v${{ steps.check.outputs.revision }}"
-          expected_commit="$(git rev-parse HEAD)"
-          if [ "${{ steps.check.outputs.recovery }}" != "true" ] && [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft 2>/dev/null || true)" = "true" ]; then
-            gh release delete "$release_tag" --yes --cleanup-tag
-            git tag -d "$release_tag" 2>/dev/null || true
-          fi
+          .venv/bin/python -c 'import os; from bees_kanji import bind_release_artifacts_to_code_revision as bind; bind("build", os.environ["FINAL_COMMIT"], os.environ["CANDIDATE_REVISION"])'
+          .venv/bin/python -c 'import os; from bees_kanji import bind_release_artifacts_to_code_revision as bind; bind("replay-build", os.environ["FINAL_COMMIT"], os.environ["CANDIDATE_REVISION"])'
+          for asset in \
+            bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS \
+            jiten-global-frequency.csv source-snapshot.zip SOURCE-LOCK.json; do
+            cmp "build/$asset" "replay-build/$asset"
+          done
+          cmp dist/index.json replay-dist/index.json
+          cmp dist/content.sha256 replay-dist/content.sha256
+
+      - name: Validate exact final publishable bytes
+        if: steps.build.outputs.changed == 'true'
+        env:
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+          CANDIDATE_REVISION: ${{ steps.preflight.outputs.candidate_revision }}
+        run: |
+          (cd build && sha256sum -c SHA256SUMS)
+          node scripts/validate_yomitan.mjs build/bees-ultimate-kanji-dictionary.zip
+          .venv/bin/python scripts/verify_source_snapshot.py \
+            build/source-snapshot.zip build/SOURCE-LOCK.json verified-source
+          .venv/bin/python - <<'PY'
+          import hashlib, json, os, pathlib, zipfile
+          build = pathlib.Path("build")
+          expected_assets = {
+              "bees-ultimate-kanji-dictionary.zip", "MANIFEST.json", "SHA256SUMS",
+              "jiten-global-frequency.csv", "source-snapshot.zip", "SOURCE-LOCK.json",
+          }
+          assert {path.name for path in build.iterdir() if path.is_file()} == expected_assets
+          manifest_bytes = (build / "MANIFEST.json").read_bytes()
+          manifest = json.loads(manifest_bytes)
+          assert manifest["codeRevision"] == os.environ["FINAL_COMMIT"]
+          assert manifest["revision"] == os.environ["CANDIDATE_REVISION"]
+          assert manifest["contentHash"] == pathlib.Path("dist/content.sha256").read_text().strip()
+          with zipfile.ZipFile(build / "bees-ultimate-kanji-dictionary.zip") as package:
+              assert package.read("MANIFEST.json") == manifest_bytes
+              assert json.loads(package.read("index.json"))["revision"] == manifest["revision"]
+          lock_bytes = (build / "SOURCE-LOCK.json").read_bytes()
+          snapshot = manifest["sources"]["sourceSnapshot"]
+          assert hashlib.sha256(lock_bytes).hexdigest() == snapshot["lockSha256"]
+          source_bytes = (build / "source-snapshot.zip").read_bytes()
+          assert hashlib.sha256(source_bytes).hexdigest() == snapshot["sha256"]
+          lock = json.loads(lock_bytes)
+          assert len(lock["files"]) == snapshot["fileCount"]
+          PY
+
+      - name: Package verified publication candidate
+        if: steps.build.outputs.changed == 'true'
+        env:
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+          CANDIDATE_REVISION: ${{ steps.preflight.outputs.candidate_revision }}
+        run: |
+          mkdir -p candidate/build candidate/dist
+          cp build/bees-ultimate-kanji-dictionary.zip build/MANIFEST.json \
+             build/SHA256SUMS build/jiten-global-frequency.csv \
+             build/source-snapshot.zip build/SOURCE-LOCK.json candidate/build/
+          cp dist/index.json dist/content.sha256 candidate/dist/
+          .venv/bin/python scripts/release_metadata.py create candidate/METADATA.json \
+            --date "$BUILD_DATE" \
+            --revision "$CANDIDATE_REVISION" \
+            --commit "$FINAL_COMMIT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.build.outputs.changed == 'true'
+        with:
+          name: verified-release-candidate
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  publish:
+    needs: [guard, build]
+    if: needs.build.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: verified-release-candidate
+          path: candidate
+
+      - name: Parse strict non-executable candidate metadata
+        id: metadata
+        env:
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          CANDIDATE_REVISION: ${{ needs.build.outputs.candidate_revision }}
+        run: |
+          python scripts/release_metadata.py verify candidate/METADATA.json \
+            --date "$BUILD_DATE" \
+            --revision "$CANDIDATE_REVISION" \
+            --output "$GITHUB_OUTPUT"
+
+      - name: Recreate and verify the exact updater commit
+        id: commit
+        env:
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          REVISION: ${{ steps.metadata.outputs.revision }}
+          EXPECTED_COMMIT: ${{ steps.metadata.outputs.commit }}
+        run: |
+          cp candidate/dist/index.json dist/index.json
+          cp candidate/dist/content.sha256 dist/content.sha256
+          git config user.name "Bee release bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add dist/index.json dist/content.sha256
+          export GIT_AUTHOR_DATE="${BUILD_DATE}T00:00:00Z"
+          export GIT_COMMITTER_DATE="${BUILD_DATE}T00:00:00Z"
+          git commit -m "Update dictionary release metadata"
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "$EXPECTED_COMMIT"
+          echo "final_commit=$actual" >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight immutable publication coordinate
+        env:
+          BUILD_DATE: ${{ needs.guard.outputs.date }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+          REVISION: ${{ steps.commit.outputs.revision }}
+        run: |
+          python scripts/release_preflight.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$GITHUB_SHA" \
+            --date "$BUILD_DATE" \
+            --assert-revision "$REVISION"
+          release_tag="v$REVISION"
           set +e
           git ls-remote --exit-code --tags origin "refs/tags/$release_tag" >/dev/null
           tag_status=$?
           set -e
-          if [ "$tag_status" -eq 0 ]; then
-            remote_tag_commit="$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)"
-            if [ "$remote_tag_commit" != "$expected_commit" ]; then
-              test "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true"
-              gh release delete "$release_tag" --yes --cleanup-tag
-              tag_status=2
-            else
-              test "$remote_tag_commit" = "$expected_commit"
-            fi
-          fi
-          if [ "$tag_status" -ne 0 ]; then
-            test "$tag_status" -eq 2
-            git tag "$release_tag" "$expected_commit"
-            git push origin "refs/tags/$release_tag:refs/tags/$release_tag"
-          fi
-          create_draft_release() {
-            gh release create "$release_tag" \
-              build/bees-ultimate-kanji-dictionary.zip \
-              build/MANIFEST.json \
-              build/SHA256SUMS \
-              --draft \
-              --verify-tag \
-              --title "Bee's Ultimate Kanji Dictionary ${{ steps.check.outputs.revision }}" \
-              --notes "Revision ${{ steps.check.outputs.revision }}. Import the ZIP in Yomitan (self-updating). Verify with SHA256SUMS; MANIFEST.json records the source/revision provenance. Bundled licences: LICENSE-data.txt (JMdict/KANJIDIC via Jiten, CC BY-SA) and LICENSE-kanjivg.txt (KanjiVG, CC BY-SA)."
-          }
-          if ! gh release view "$release_tag" >/dev/null 2>&1; then
-            create_draft_release
-          else
-            release_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
-            release_immutable="$(gh api --jq .immutable "repos/${GITHUB_REPOSITORY}/releases/tags/$release_tag")"
-            if [ "$release_draft" = "true" ]; then
-              gh release upload "$release_tag" \
-                build/bees-ultimate-kanji-dictionary.zip \
-                build/MANIFEST.json \
-                build/SHA256SUMS \
-                --clobber
-            elif [ "$release_immutable" != "true" ]; then
-              gh release delete "$release_tag" --yes
-              create_draft_release
-            else
-              echo "Cannot replace incomplete immutable release $release_tag; fix forward with a fresh revision." >&2
-              exit 1
-            fi
-          fi
+          test "$tag_status" -eq 2
+          git tag "$release_tag" "$FINAL_COMMIT"
 
-      - name: Verify published assets
-        if: steps.check.outputs.publish == 'true'
+      - name: Push the fresh tag without persisting credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.commit.outputs.revision }}
+        run: |
+          release_tag="v$REVISION"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "refs/tags/$release_tag:refs/tags/$release_tag"
+
+      - name: Create and verify draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.commit.outputs.revision }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+        run: |
+          release_tag="v$REVISION"
+          cat > RELEASE_NOTES.md <<'EOF'
+          Daily immutable dictionary release. Frequency weight is a documented,
+          rank-derived matched-form metric, not observed occurrence probability.
+          Verify every retained source and derived asset with SHA256SUMS and
+          MANIFEST.json before use.
+          EOF
+          gh release create "$release_tag" \
+            candidate/build/bees-ultimate-kanji-dictionary.zip \
+            candidate/build/MANIFEST.json \
+            candidate/build/SHA256SUMS \
+            candidate/build/jiten-global-frequency.csv \
+            candidate/build/source-snapshot.zip \
+            candidate/build/SOURCE-LOCK.json \
+            --draft --verify-tag --title "$release_tag" --notes-file RELEASE_NOTES.md
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq ".[] | select(.tag_name == \"$release_tag\") | .id")"
+          test -n "$release_id"
+          asset_names="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '[.[].name] | sort | join(" ")')"
+          test "$asset_names" = "MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip"
+          rm -rf verify-draft && mkdir verify-draft
+          gh release download "$release_tag" --dir verify-draft
+          for asset in MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip; do
+            cmp "candidate/build/$asset" "verify-draft/$asset"
+            local_digest="sha256:$(sha256sum "candidate/build/$asset" | cut -d' ' -f1)"
+            remote_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq ".[] | select(.name == \"$asset\") | .digest")"
+            test "$remote_digest" = "$local_digest"
+          done
+          (cd verify-draft && sha256sum -c SHA256SUMS)
+          test "$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)" = "$FINAL_COMMIT"
+
+      - name: Publish, require host immutability, and verify public served bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ steps.commit.outputs.revision }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+        run: |
+          release_tag="v$REVISION"
+          gh release edit "$release_tag" --draft=false --latest
+          immutable=false
+          for _ in $(seq 1 15); do
+            immutable="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq .immutable)"
+            [ "$immutable" = true ] && break
+            sleep 2
+          done
+          test "$immutable" = true
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$release_tag"
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq .id)"
+          asset_names="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '[.[].name] | sort | join(" ")')"
+          test "$asset_names" = "MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip"
+          rm -rf verify-public verify-latest && mkdir verify-public verify-latest
+          for asset in MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip; do
+            max_size="$(stat -c %s "candidate/build/$asset")"
+            curl --fail --location --retry 2 --retry-all-errors --max-time 300 \
+              --max-filesize "$max_size" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/download/$release_tag/$asset" \
+              --output "verify-public/$asset"
+            curl --fail --location --retry 2 --retry-all-errors --max-time 300 \
+              --max-filesize "$max_size" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$asset" \
+              --output "verify-latest/$asset"
+            cmp "candidate/build/$asset" "verify-public/$asset"
+            cmp "candidate/build/$asset" "verify-latest/$asset"
+            local_digest="sha256:$(sha256sum "candidate/build/$asset" | cut -d' ' -f1)"
+            remote_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq ".[] | select(.name == \"$asset\") | .digest")"
+            test "$remote_digest" = "$local_digest"
+          done
+          (cd verify-public && sha256sum -c SHA256SUMS)
+          (cd verify-latest && sha256sum -c SHA256SUMS)
+          test "$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)" = "$FINAL_COMMIT"
+
+      - name: Expose updater only after immutable public verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINAL_COMMIT: ${{ steps.commit.outputs.final_commit }}
+        run: |
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$FINAL_COMMIT:refs/heads/main"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$FINAL_COMMIT"
+
+  recover_updater:
+    needs: [guard, build]
+    if: needs.build.outputs.changed != 'true' && needs.build.outputs.recovery_tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify immutable release and safely finish its exact updater commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_TAG: ${{ needs.build.outputs.recovery_tag }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$RECOVERY_TAG"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RECOVERY_TAG" --jq .immutable)" = true
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RECOVERY_TAG" --jq .id)"
+          asset_names="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '[.[].name] | sort | join(" ")')"
+          test "$asset_names" = "MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip"
+          rm -rf recovered recovered-latest && mkdir recovered recovered-latest
+          gh release download "$RECOVERY_TAG" --dir recovered
+          (cd recovered && sha256sum -c SHA256SUMS)
+          for asset in MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip; do
+            max_size="$(stat -c %s "recovered/$asset")"
+            curl --fail --location --retry 2 --retry-all-errors --max-time 300 \
+              --max-filesize "$max_size" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$asset" \
+              --output "recovered-latest/$asset"
+            cmp "recovered/$asset" "recovered-latest/$asset"
+            local_digest="sha256:$(sha256sum "recovered/$asset" | cut -d' ' -f1)"
+            remote_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq ".[] | select(.name == \"$asset\") | .digest")"
+            test "$remote_digest" = "$local_digest"
+          done
+          git fetch --no-tags origin "refs/tags/$RECOVERY_TAG"
+          recovery_commit="$(git rev-parse 'FETCH_HEAD^{}')"
+          test "$(git rev-parse "$recovery_commit^")" = "$GITHUB_SHA"
+          changed="$(git diff-tree --no-commit-id --name-only -r "$recovery_commit" | sort | tr '\n' ' ')"
+          test "$changed" = "dist/content.sha256 dist/index.json "
+          python - "$recovery_commit" "$RECOVERY_TAG" <<'PY'
+          import json, pathlib, subprocess, sys
+          commit, tag = sys.argv[1:]
+          manifest = json.loads(pathlib.Path("recovered/MANIFEST.json").read_text())
+          index = json.loads(subprocess.check_output(["git", "show", f"{commit}:dist/index.json"]))
+          content_hash = subprocess.check_output(["git", "show", f"{commit}:dist/content.sha256"], text=True).strip()
+          assert manifest["codeRevision"] == commit
+          assert manifest["revision"] == tag.removeprefix("v") == index["revision"]
+          assert manifest["contentHash"] == content_hash
+          PY
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$recovery_commit:refs/heads/main"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$recovery_commit"
+
+  verify_no_change:
+    needs: [guard, build]
+    if: needs.build.outputs.changed != 'true' && needs.build.outputs.recovery_tag == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a complete immutable release matching the updater
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          release_tag="v${{ steps.check.outputs.revision }}"
-          expected_commit="$(git rev-parse HEAD)"
-          git fetch --force origin "refs/tags/$release_tag:refs/tags/$release_tag"
-          tag_commit="$(git rev-list -n 1 "$release_tag")"
-          test "$tag_commit" = "$expected_commit"
-          mkdir -p verify
-          gh release download "$release_tag" --dir verify --clobber
-          asset_names="$(gh release view "$release_tag" --json assets --jq '[.assets[].name] | sort | join(" ")')"
-          test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"
-          (cd verify && sha256sum -c SHA256SUMS)
-          node scripts/validate_yomitan.mjs verify/bees-ultimate-kanji-dictionary.zip
-          # the standalone manifest asset must match the copy bundled in the ZIP
-          python -c "import zipfile,sys; b=zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('MANIFEST.json'); s=open('verify/MANIFEST.json','rb').read(); sys.exit(0 if b==s else 'MANIFEST.json mismatch')"
-          python -c "import json,sys,zipfile; manifest=json.load(open('verify/MANIFEST.json')); index=json.loads(zipfile.ZipFile('verify/bees-ultimate-kanji-dictionary.zip').read('index.json')); expected_commit,expected_revision=sys.argv[1:]; assert manifest['codeRevision'] == expected_commit; assert manifest['revision'] == expected_revision; assert index['revision'] == expected_revision" "$expected_commit" "${{ steps.check.outputs.revision }}"
-          for asset in bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS; do
-            cmp "build/$asset" "verify/$asset"
+          revision="$(python -c 'import json; print(json.load(open("dist/index.json"))["revision"])')"
+          release_tag="v$revision"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" = "$release_tag"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq .immutable)" = true
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$release_tag" --jq .id)"
+          asset_names="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq '[.[].name] | sort | join(" ")')"
+          test "$asset_names" = "MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip"
+          rm -rf existing existing-latest && mkdir existing existing-latest
+          gh release download "$release_tag" --dir existing
+          (cd existing && sha256sum -c SHA256SUMS)
+          for asset in MANIFEST.json SHA256SUMS SOURCE-LOCK.json bees-ultimate-kanji-dictionary.zip jiten-global-frequency.csv source-snapshot.zip; do
+            max_size="$(stat -c %s "existing/$asset")"
+            curl --fail --location --retry 2 --retry-all-errors --max-time 300 \
+              --max-filesize "$max_size" \
+              "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$asset" \
+              --output "existing-latest/$asset"
+            cmp "existing/$asset" "existing-latest/$asset"
+            local_digest="sha256:$(sha256sum "existing/$asset" | cut -d' ' -f1)"
+            remote_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --jq ".[] | select(.name == \"$asset\") | .digest")"
+            test "$remote_digest" = "$local_digest"
           done
-
-      - name: Publish verified updater commit
-        if: steps.check.outputs.publish == 'true'
-        run: |
-          expected_commit="$(git rev-parse HEAD)"
-          git push origin "HEAD:main"
-          remote_main="$(git ls-remote origin refs/heads/main | cut -f1)"
-          test "$remote_main" = "$expected_commit"
-
-      - name: Publish verified immutable release
-        if: steps.check.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          release_tag="v${{ steps.check.outputs.revision }}"
-          immutable="$(gh api --jq '.immutable' "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}" 2>/dev/null || echo false)"
-          if [ "$immutable" != "true" ]; then
-            gh release edit "$release_tag" --draft=false --latest
-          fi
-          immutable="$(gh api --jq '.immutable' \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
-          test "$immutable" = "true"
-          latest_tag="$(gh api --jq '.tag_name' \
-            "repos/${GITHUB_REPOSITORY}/releases/latest")"
-          test "$latest_tag" = "$release_tag"
-          asset_names="$(gh api --jq '[.assets[].name] | sort | join(" ")' \
-            "repos/${GITHUB_REPOSITORY}/releases/tags/${release_tag}")"
-          test "$asset_names" = "MANIFEST.json SHA256SUMS bees-ultimate-kanji-dictionary.zip"
-          remote_tag_commit="$(git ls-remote origin "refs/tags/$release_tag" | cut -f1)"
-          expected_commit="$(git rev-parse HEAD)"
-          test "$remote_tag_commit" = "$expected_commit"
-          mkdir -p verify-published
-          gh release download "$release_tag" --dir verify-published --clobber
-          (cd verify-published && sha256sum -c SHA256SUMS)
-          for asset in bees-ultimate-kanji-dictionary.zip MANIFEST.json SHA256SUMS; do
-            cmp "build/$asset" "verify-published/$asset"
-          done
+          git fetch --no-tags origin "refs/tags/$release_tag"
+          tag_commit="$(git rev-parse 'FETCH_HEAD^{}')"
+          python - "$tag_commit" "$revision" <<'PY'
+          import json, pathlib, sys, zipfile
+          commit, revision = sys.argv[1:]
+          manifest_bytes = pathlib.Path("existing/MANIFEST.json").read_bytes()
+          manifest = json.loads(manifest_bytes)
+          index = json.loads(pathlib.Path("dist/index.json").read_text())
+          assert manifest["codeRevision"] == commit
+          assert manifest["revision"] == revision == index["revision"]
+          assert manifest["contentHash"] == pathlib.Path("dist/content.sha256").read_text().strip()
+          with zipfile.ZipFile("existing/bees-ultimate-kanji-dictionary.zip") as archive:
+              assert archive.read("MANIFEST.json") == manifest_bytes
+              assert json.loads(archive.read("index.json"))["revision"] == revision
+          PY

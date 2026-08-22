@@ -8,7 +8,7 @@ in this exact order:
      (``reading_entry_counts``), rendered as plain reading CHIPS -- NOT split
      into On/Kun labelled groups
   3. a compact MEANING line
-  4. the reading-distribution chart, rendered as ONE packaged raster PNG image
+  4. the rank-derived Frequency weight chart, rendered as ONE packaged raster PNG image
      referenced through supported structured content (with alt text / legend)
   5. exactly SIX globally highest-frequency, de-duplicated vocabulary words in a
      responsive two-column grid (3 left / 3 right), each with ruby + concise gloss
@@ -28,7 +28,16 @@ FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 
 
 def rec(name):
-    return bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record = bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record["reading_frequency_scores"] = [
+        {
+            "reading": item["reading"],
+            "score": 1.0 / (index + 1),
+            "reading_class": item["reading_class"],
+        }
+        for index, item in enumerate(record["reading_entry_counts"])
+    ]
+    return record
 
 
 def payload(name):
@@ -146,7 +155,7 @@ def test_meaning_line_present_and_distinct():
 
 # --- 4. raster PNG chart ------------------------------------------------------
 
-def test_distribution_is_single_packaged_png_image():
+def test_frequency_weight_is_single_packaged_png_image():
     for char in ("場", "生"):
         root = _detail_root(char)
         donut = bk_find(root, "reading-donut")
@@ -157,7 +166,7 @@ def test_distribution_is_single_packaged_png_image():
         path = str(img.get("path", ""))
         assert path.lower().endswith(".png"), f"{char}: chart img is not a PNG: {path}"
         cp = ord(char)
-        assert path == f"reading-distribution/{cp:05x}.png", f"{char}: bad path {path}"
+        assert path == f"reading-frequency/{cp:05x}.png", f"{char}: bad path {path}"
         # alt text / legend must carry the information without pixels
         assert img.get("alt"), f"{char}: chart img missing alt text"
 

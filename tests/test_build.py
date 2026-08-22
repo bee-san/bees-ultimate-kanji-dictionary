@@ -70,7 +70,6 @@ def test_build_banks_sorted_by_codepoint_and_shapes():
 
 
 def test_top1000_quality_floor():
-    banks = bk.build_banks(records(), aliases={"髙": "高"})
     recs = {r["character"]: r for r in records()}
     for r in recs.values():
         if r["frequency_rank"] is not None and r["frequency_rank"] <= 1000:
@@ -88,11 +87,9 @@ def test_no_junk_anywhere_in_output():
     # Raw Jiten key names must never leak into the built banks.
     assert "totalWords" not in blob
     assert "total_words" not in blob
-    # Percentages surface while raw counts stay out of the card.
-    for r in records():
-        for seg in bk.reading_distribution(r)["segments"]:
-            assert f"{seg['percent']}%" in blob
-            assert f"{seg['count']:,} entries" not in blob
+    # Entry counts are not rendered as Frequency weight without a bulk rank join.
+    assert "reading-distribution/" not in blob
+    assert "Frequency weight" not in blob
     # Junk *tokens* are rejected at cleaning time; the fixtures contain no
     # standalone 'missing'/'???' entries, so none appear here. (Real glosses
     # elsewhere may legitimately contain the English word 'missing' or a '%'

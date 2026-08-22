@@ -48,6 +48,35 @@ def test_screenshots_are_genuine_real_yomitan_captures():
     )
 
 
+def test_frequency_weight_hero_strip_is_the_exact_final_yomitan_capture_set():
+    """Keep stale entry-count screenshots from silently returning to GitHub."""
+    import hashlib
+
+    from PIL import Image
+
+    expected = {
+        "docs/images/real-yomitan/sei-compact-light.png": (
+            (1280, 900),
+            "4d9437af030ca0c6cc340fb8ff678b9efbf4f427c97371801891c0dd07816bac",
+        ),
+        "docs/images/real-yomitan/sei-expanded-light.png": (
+            (1280, 900),
+            "94d829f3cae333709697c21ebfe7d249310685fe858ed4268ea33cc6bc6a77d8",
+        ),
+        "docs/images/real-yomitan/ba-narrow-expanded.png": (
+            (380, 820),
+            "751a899c30034b1c6672fe436595784353a02e3ee72f2534fa0f64568753caa9",
+        ),
+    }
+    for relative, (size, digest) in expected.items():
+        path = ROOT / relative
+        with Image.open(path) as image:
+            assert image.size == size, relative
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest, relative
+    assert "380px" in README
+    assert "300px" not in README
+
+
 def test_download_and_update_urls_match_generator():
     # The README must point at the same canonical download + auto-update URLs
     # the generator writes into index.json, so the docs never drift from code.
@@ -73,11 +102,12 @@ def test_required_licence_and_attribution_notices_present():
     assert "LICENSE-kanjivg.txt" in README
 
 
-def test_reading_distribution_is_documented_concisely():
+def test_frequency_weight_is_documented_concisely_and_honestly():
     low = README.lower()
-    assert "reading distribution" in low
-    assert "counts distinct" not in low
-    assert "usage frequency" not in low
+    assert "frequency weight" in low
+    assert "rank-derived, not corpus probability" in low
+    assert "1/sqrt(r)" in low
+    assert "entry counts are never relabelled as frequency" in low
 
 
 def test_stroke_diagram_is_documented_as_static():

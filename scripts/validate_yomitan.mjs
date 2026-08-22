@@ -69,8 +69,8 @@ let ok = true;
 
 // Only media assets may live in a subfolder; everything else is root-only.
 // Permitted media: sanitized KanjiVG stroke SVGs and per-entry
-// reading-distribution PNG charts.
-const MEDIA_MEMBER = /^(?:kanjivg\/[0-9a-f]+\.svg|reading-distribution\/[0-9a-f]+\.png)$/;
+// rank-derived Frequency weight PNG charts.
+const MEDIA_MEMBER = /^(?:kanjivg\/[0-9a-f]+\.svg|reading-frequency\/[0-9a-f]+\.png)$/;
 for (const name of names) {
   if (name.includes("/") && !MEDIA_MEMBER.test(name)) {
     console.error(`FAIL: unexpected non-root member: ${name}`);
@@ -110,7 +110,10 @@ for (const asset of svgAssets) {
   }
 }
 
-const ajv = new Ajv({ allErrors: true, strict: false });
+// Fail fast within each invalid schema branch. This preserves complete draft-07
+// validation while avoiding enormous discarded error arrays for the many oneOf
+// alternatives in a production structured-content bank.
+const ajv = new Ajv({ allErrors: false, strict: false });
 
 for (const [member, schemaName] of Object.entries(SCHEMA_FOR)) {
   if (!nameSet.has(member)) continue;

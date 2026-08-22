@@ -70,29 +70,40 @@ def _walk_img_paths(node, out):
             _walk_img_paths(v, out)
 
 
-def test_run_build_bundles_reading_distribution_pngs_with_no_dangling_refs(tmp_path):
-    # Every reading-distribution chart the term cards reference must be packaged
-    # as a real PNG member -- a built ZIP must never carry a dangling img path.
+def test_run_build_bundles_frequency_weight_pngs_with_no_dangling_refs(tmp_path):
+    # Every rank-derived chart the term cards reference must be a real ZIP member.
     cache = tmp_path / "cache"
+    frequency_cache = tmp_path / "frequency-cache"
+    frequency_csv = "Word,Form,Rank\n場,ば,100\n生,せい,50\n"
 
-    result = bk.run_build(CHARS, str(cache), "2026-08-16", aliases={}, fetcher=_payload)
+    result = bk.run_build(
+        CHARS,
+        str(cache),
+        "2026-08-16",
+        aliases={},
+        fetcher=_payload,
+        frequency_cache_dir=str(frequency_cache),
+        frequency_fetcher=lambda: frequency_csv,
+    )
 
     with zipfile.ZipFile(io.BytesIO(result["zip_bytes"])) as zf:
         names = set(zf.namelist())
         term_bank = json.loads(zf.read("term_bank_1.json"))
-        # each shipped PNG is a real 128x128 RGBA PNG
-        pngs = [n for n in names if n.startswith("reading-distribution/")]
-        assert pngs, "expected packaged reading-distribution PNGs"
+
+        pngs = [n for n in names if n.startswith("reading-frequency/")]
+        assert pngs, "expected packaged Frequency weight PNGs"
         for name in pngs:
             data = zf.read(name)
             assert data[:8] == b"\x89PNG\r\n\x1a\n"
 
     referenced = set()
     _walk_img_paths(term_bank, referenced)
-    charts = {p for p in referenced if p.startswith("reading-distribution/")}
+    charts = {p for p in referenced if p.startswith("reading-frequency/")}
     assert charts, "term cards must reference the packaged chart PNGs"
     dangling = charts - names
     assert not dangling, f"dangling chart references: {dangling}"
-    # both 場 and 生 have valid Jiten totals -> both get a chart
     for c in CHARS:
-        assert bk.reading_distribution_asset_name(c) in names
+        assert bk.reading_frequency_asset_name(c) in names
+    assert not any(name.startswith("reading-distribution/") for name in names)
+    assert result["enrichment_counts"]["assets"] == 0
+    assert result["frequency_stats"]["chartAssets"] == 2

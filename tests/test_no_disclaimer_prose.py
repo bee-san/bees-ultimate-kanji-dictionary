@@ -17,7 +17,7 @@ BANNED = re.compile(
     r"\b(disclaimer|warning|caution|please note|note that|beware|caveat|"
     r"may be inaccurate|not guaranteed|use at your own risk|"
     r"approximate only|unofficial data)\b",
-    re.I,
+    re.IGNORECASE,
 )
 
 CHARS = ["場", "生", "来", "事", "男", "行", "高"]

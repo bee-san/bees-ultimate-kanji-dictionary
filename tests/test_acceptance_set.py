@@ -20,7 +20,16 @@ FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 
 
 def rec(name):
-    return bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record = bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record["reading_frequency_scores"] = [
+        {
+            "reading": item["reading"],
+            "score": 1.0 / (index + 1),
+            "reading_class": item["reading_class"],
+        }
+        for index, item in enumerate(record["reading_entry_counts"])
+    ]
+    return record
 
 
 def _walk(node):
@@ -84,12 +93,12 @@ def test_rai_has_full_compact_card_above_the_fold():
 
 def test_rai_chart_is_a_real_packaged_png_with_multiple_segments():
     r = rec("来.json")
-    dist = bk.reading_distribution(r)
+    dist = bk.reading_frequency_distribution(r)
     assert dist["total"] > 0
     # a real multi-reading distribution -> at least two coloured segments so the
     # rendered donut visibly carries more than one colour.
     assert len([s for s in dist["segments"] if s["percent"] > 0]) >= 2
-    png = bk.build_reading_distribution_png(r)
+    png = bk.build_reading_frequency_png(r)
     assert png and png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
@@ -108,18 +117,16 @@ def test_long_entry_has_many_readings_but_compact_stays_top_three():
 # --- sparse KANJIDIC2-only fallback is chart-free ----------------------------
 
 def test_kanjidic2_only_fallback_is_chart_free():
-    # Build a KANJIDIC2-only record (no Jiten vocabulary) and confirm it carries
-    # NO reading-distribution chart -- we never synthesise a distribution.
+    # Build a KANJIDIC2-only record and confirm no Frequency weight is fabricated.
     xml = (FIX / "kanjidic2_sample.xml").read_text(encoding="utf-8")
     idx = bk.parse_kanjidic2(xml)
     # pick a literal present only in KANJIDIC2 (not one of the Jiten fixtures)
     sparse_char = next(c for c in idx if c not in "事場生男行高来")
     fallback = bk.kanjidic2_record(sparse_char, idx[sparse_char])
     assert fallback["global_words"] == []
-    dist = bk.reading_distribution(fallback)
-    assert dist["total"] == 0, "sparse fallback must have no distribution to chart"
-    assert bk.build_reading_distribution_png(fallback) is None, "no faked chart for sparse fallback"
-    assert bk.build_reading_chart_node(fallback) is None
+    assert fallback.get("reading_frequency_scores", []) == []
+    assert bk.build_reading_frequency_png(fallback) is None
+    assert bk.build_reading_frequency_node(fallback) is None
     root = bk._detail_content(fallback)[0]
     assert not [n for n in _walk(root) if _role(n) == "reading-donut"], \
         "KANJIDIC2-only fallback must not render a chart node"

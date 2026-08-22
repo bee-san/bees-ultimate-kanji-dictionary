@@ -14,7 +14,16 @@ FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 
 
 def rec(name):
-    return bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record = bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record["reading_frequency_scores"] = [
+        {
+            "reading": item["reading"],
+            "score": 1.0 / (index + 1),
+            "reading_class": item["reading_class"],
+        }
+        for index, item in enumerate(record["reading_entry_counts"])
+    ]
+    return record
 
 
 def _enrichment_for(char):
@@ -40,17 +49,17 @@ def test_term_entry_without_enrichment_matches_legacy_shape():
     assert "location" in json.dumps(detail, ensure_ascii=False)
 
 
-def test_term_entry_embeds_donut_when_reading_counts_present():
-    r = rec("\u751f.json")  # 生 has full wordsByReading group totals
+def test_term_entry_embeds_rank_weight_pie_when_bulk_scores_are_present():
+    r = rec("\u751f.json")
     entry = bk.build_term_entry(r, enrichment=None)
     blob = json.dumps(entry, ensure_ascii=False)
-    # donut renders the truthful share of Jiten vocabulary entries by reading,
-    # computed over the complete group totals (denominator 3922), NOT examples
+    # The test-only scores exercise the renderer; production populates this field
+    # exclusively from the validated Jiten Global bulk join.
     assert "reading-donut" in blob
     assert "%" in blob
-    assert "Reading distribution" in blob
+    assert "Frequency weight" in blob
+    assert "Rank-derived frequency weight" in blob
     assert "Counts distinct Jiten vocabulary" not in blob
-    assert bk.reading_distribution(r)["total"] == 3922
 
 
 def test_term_entry_embeds_stroke_and_phonetic_when_enriched():

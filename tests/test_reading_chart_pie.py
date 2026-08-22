@@ -1,16 +1,26 @@
-"""Regression contract for the visible, compact reading-distribution pie chart."""
+"""Regression contract for the visible, compact Frequency weight pie chart."""
 import io
 import json
 import pathlib
 
-import bees_kanji as bk
 from PIL import Image
+
+import bees_kanji as bk
 
 FIX = pathlib.Path(__file__).resolve().parent.parent / "fixtures"
 
 
 def rec(name):
-    return bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record = bk.normalize_record(json.loads((FIX / name).read_text(encoding="utf-8")))
+    record["reading_frequency_scores"] = [
+        {
+            "reading": item["reading"],
+            "score": 1.0 / (index + 1),
+            "reading_class": item["reading_class"],
+        }
+        for index, item in enumerate(record["reading_entry_counts"])
+    ]
+    return record
 
 
 def _walk(node):
@@ -22,11 +32,11 @@ def _walk(node):
             yield from _walk(item)
 
 
-def test_distribution_contains_packaged_pie_with_compact_host_geometry():
+def test_frequency_weight_contains_packaged_pie_with_compact_host_geometry():
     record = rec("生.json")
-    node = bk.build_reading_distribution_node(record)
+    node = bk.build_reading_frequency_node(record)
     image = next(n for n in _walk(node) if n.get("tag") == "img")
-    assert image["path"] == bk.reading_distribution_asset_name("生")
+    assert image["path"] == bk.reading_frequency_asset_name("生")
     assert image["collapsed"] is False
     assert image["collapsible"] is False
 
@@ -38,7 +48,7 @@ def test_distribution_contains_packaged_pie_with_compact_host_geometry():
 
 
 def test_generated_chart_is_a_filled_pie_not_a_donut():
-    png = bk.build_reading_distribution_png(rec("場.json"))
+    png = bk.build_reading_frequency_png(rec("場.json"))
     image = Image.open(io.BytesIO(png)).convert("RGBA")
     assert image.size == (128, 128)
     center = image.getpixel((image.width // 2, image.height // 2))
@@ -47,10 +57,13 @@ def test_generated_chart_is_a_filled_pie_not_a_donut():
 
 
 def test_visible_text_legend_remains_the_accessible_source_of_truth():
-    node = bk.build_reading_distribution_node(rec("場.json"))
+    record = rec("場.json")
+    node = bk.build_reading_frequency_node(record)
     blob = json.dumps(node, ensure_ascii=False)
-    assert "Reading distribution" in blob
-    assert "じょう (On): 58%" in blob
+    assert "Frequency weight" in blob
+    assert "Rank-derived frequency weight" in blob
+    for segment in bk.reading_frequency_distribution(record)["segments"]:
+        label = segment["reading"] or "Other"
+        assert f"{label}: {segment['percent']}%" in blob
     assert "2,904 entries" not in blob
-    assert "ば (Kun): 42%" in blob
     assert "2,083 entries" not in blob
