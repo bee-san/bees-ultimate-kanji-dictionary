@@ -143,3 +143,5 @@ share-alike licence.
 
 Both notices (`LICENSE-data.txt` and `LICENSE-kanjivg.txt`) are bundled inside
 every release ZIP alongside the data.
+
+based on https://skerritt.blog/the-best-noob-kanji-dictionary/ 
