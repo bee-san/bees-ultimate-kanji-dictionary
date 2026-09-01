@@ -7,8 +7,8 @@
 //   - data JSON, index.json, styles.css and the LICENSE notices are at the ZIP
 //     root (Yomitan requires bank JSON at the root); the only permitted
 //     subfolder members are bundled media assets under kanjivg/*.svg
-//   - index.json, term/kanji bank, and term/kanji meta bank each validate
-//     against schemas/*.json using JSON Schema draft-07 (ajv)
+//   - index.json and every sequential term/term-meta bank validate against
+//     schemas/*.json using JSON Schema draft-07 (ajv)
 //   - every bundled kanjivg/*.svg is sanitized (no <script>, kvg: attrs, xlink,
 //     event handlers, or external <image>)
 //   - every structured-content img path referenced by the term bank resolves to
@@ -39,8 +39,6 @@ if (!zipPath) {
 const EXPECTED_ROOT = [
   "index.json",
   "MANIFEST.json",
-  "term_bank_1.json",
-  "term_meta_bank_1.json",
   "styles.css",
   "LICENSE-data.txt",
 ];
@@ -49,13 +47,26 @@ const EXPECTED_ROOT = [
 // unstyleable native renderer, which would silently supersede the rich
 // structured term card on the user's ordinary lookup path. The structured
 // single-character term entry is the one canonical surface.
-const FORBIDDEN_ROOT = ["kanji_bank_1.json", "kanji_meta_bank_1.json"];
+const FORBIDDEN_BANK = /^(?:kanji_bank|kanji_meta_bank)_[1-9][0-9]*\.json$/;
 
 const SCHEMA_FOR = {
   "index.json": "dictionary-index-schema.json",
-  "term_bank_1.json": "dictionary-term-bank-v3-schema.json",
-  "term_meta_bank_1.json": "dictionary-term-meta-bank-v3-schema.json",
 };
+
+const BANK_GROUPS = [
+  {
+    label: "term bank",
+    pattern: /^term_bank_([1-9][0-9]*)\.json$/,
+    schema: "dictionary-term-bank-v3-schema.json",
+    entryLimit: 1000,
+  },
+  {
+    label: "term meta bank",
+    pattern: /^term_meta_bank_([1-9][0-9]*)\.json$/,
+    schema: "dictionary-term-meta-bank-v3-schema.json",
+    entryLimit: null,
+  },
+];
 
 function loadSchema(name) {
   return JSON.parse(readFileSync(join(schemaDir, name), "utf-8"));
@@ -83,7 +94,7 @@ for (const want of EXPECTED_ROOT) {
     ok = false;
   }
 }
-for (const forbidden of FORBIDDEN_ROOT) {
+for (const forbidden of names.filter((name) => FORBIDDEN_BANK.test(name))) {
   if (nameSet.has(forbidden)) {
     console.error(
       `FAIL: forbidden native kanji bank present: ${forbidden} ` +
@@ -114,10 +125,12 @@ for (const asset of svgAssets) {
 // validation while avoiding enormous discarded error arrays for the many oneOf
 // alternatives in a production structured-content bank.
 const ajv = new Ajv({ allErrors: false, strict: false });
+const parsedMembers = new Map();
 
 for (const [member, schemaName] of Object.entries(SCHEMA_FOR)) {
   if (!nameSet.has(member)) continue;
   const data = JSON.parse(zip.readAsText(member));
+  parsedMembers.set(member, data);
   const validate = ajv.compile(loadSchema(schemaName));
   if (!validate(data)) {
     ok = false;
@@ -131,9 +144,65 @@ for (const [member, schemaName] of Object.entries(SCHEMA_FOR)) {
   }
 }
 
+const bankMembers = new Map();
+for (const group of BANK_GROUPS) {
+  const members = names
+    .map((name) => {
+      const match = group.pattern.exec(name);
+      return match ? { name, number: Number(match[1]) } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.number - b.number);
+  bankMembers.set(group.label, members);
+
+  if (members.length === 0) {
+    console.error(`FAIL: no ${group.label} members found`);
+    ok = false;
+    continue;
+  }
+  const expectedNumbers = members.map((_member, index) => index + 1);
+  if (members.some((member, index) => member.number !== expectedNumbers[index])) {
+    console.error(
+      `FAIL: ${group.label} members are not contiguous from 1: ` +
+        members.map((member) => member.name).join(", ")
+    );
+    ok = false;
+  }
+
+  const validate = ajv.compile(loadSchema(group.schema));
+  for (const [index, member] of members.entries()) {
+    const data = JSON.parse(zip.readAsText(member.name));
+    parsedMembers.set(member.name, data);
+    if (!validate(data)) {
+      ok = false;
+      console.error(`FAIL: ${member.name} does not match ${group.schema}`);
+      for (const err of validate.errors.slice(0, 5)) {
+        console.error(`   ${err.instancePath} ${err.message}`);
+      }
+      continue;
+    }
+    if (group.entryLimit !== null) {
+      const isFinal = index === members.length - 1;
+      if (
+        data.length === 0 ||
+        data.length > group.entryLimit ||
+        (!isFinal && data.length !== group.entryLimit)
+      ) {
+        console.error(
+          `FAIL: ${member.name} has ${data.length} entries; ` +
+            `non-final banks must have ${group.entryLimit} and the final bank 1-${group.entryLimit}`
+        );
+        ok = false;
+        continue;
+      }
+    }
+    console.log(`OK: ${member.name} (${data.length} entries) matches ${group.schema}`);
+  }
+}
+
 // Every referenced structured-content img path must resolve to a bundled asset.
-if (nameSet.has("term_bank_1.json")) {
-  const terms = JSON.parse(zip.readAsText("term_bank_1.json"));
+const termBanks = bankMembers.get("term bank") || [];
+if (termBanks.length > 0) {
   const referenced = new Set();
   const walk = (node) => {
     if (Array.isArray(node)) {
@@ -145,7 +214,9 @@ if (nameSet.has("term_bank_1.json")) {
       for (const v of Object.values(node)) walk(v);
     }
   };
-  walk(terms);
+  for (const member of termBanks) {
+    walk(parsedMembers.get(member.name));
+  }
   for (const path of referenced) {
     if (!nameSet.has(path)) {
       console.error(`FAIL: dangling img asset reference: ${path}`);

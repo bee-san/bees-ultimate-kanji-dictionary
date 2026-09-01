@@ -2342,6 +2342,32 @@ BANK_FILES = [
     ("term_meta_bank_1.json", "term_meta_bank"),
 ]
 
+# Keep each structured term bank small enough for constrained Android/Firefox
+# imports to make progress without holding every rich card and media reference
+# from the dictionary in one large JSON value.
+TERM_BANK_ENTRY_LIMIT = 1_000
+
+
+def iter_bank_members(banks):
+    """Yield deterministic ``(archive_name, entries)`` bank members.
+
+    The rich structured term bank is split into sequential chunks. Other shipped
+    banks retain their existing single-file layout. A fresh call derives the
+    complete member list from the current entries, so rebuilding a smaller
+    dictionary cannot retain stale higher-numbered term banks.
+    """
+    for filename, key in BANK_FILES:
+        entries = banks[key]
+        if key != "term_bank":
+            yield filename, entries
+            continue
+        chunks = [
+            entries[start:start + TERM_BANK_ENTRY_LIMIT]
+            for start in range(0, len(entries), TERM_BANK_ENTRY_LIMIT)
+        ] or [[]]
+        for number, chunk in enumerate(chunks, 1):
+            yield f"term_bank_{number}.json", chunk
+
 
 def dump_json(obj):
     """Serialize to canonical, deterministic UTF-8 JSON (no ASCII escaping)."""
@@ -2506,7 +2532,10 @@ def content_hash(banks, assets=None, source_counts=None,
     # bytes and generated data must hash identically on consecutive UTC days.
     hash_frequency_stats.pop("retrievedDate", None)
     material = {
-        "banks": {name: banks[name] for _, name in BANK_FILES},
+        "banks": {
+            filename: entries
+            for filename, entries in iter_bank_members(banks)
+        },
         "package": {
             "index": build_index(""),
             "manifest": build_manifest(
@@ -2729,8 +2758,8 @@ def build_zip(banks, revision, assets=None, manifest=None):
     members = [("index.json", dump_json(build_index(revision)))]
     if manifest is not None:
         members.append(("MANIFEST.json", dump_json(manifest)))
-    for filename, key in BANK_FILES:
-        members.append((filename, dump_json(banks[key])))
+    for filename, entries in iter_bank_members(banks):
+        members.append((filename, dump_json(entries)))
     members.append(("styles.css", STYLES_CSS))
     members.append(("LICENSE-data.txt", LICENSE_DATA_TEXT))
     if any(str(path).lower().endswith(".svg") for path in assets):

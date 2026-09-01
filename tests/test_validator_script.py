@@ -4,6 +4,7 @@ This exercises scripts/validate_yomitan.mjs against the official schemas via
 ajv, catching any drift between our Python builder and Yomitan's real schema
 expectations. Skips gracefully if node/node_modules are unavailable.
 """
+import copy
 import json
 import pathlib
 import shutil
@@ -127,3 +128,42 @@ def test_node_validator_accepts_enriched_zip_with_assets(tmp_path):
     )
     assert proc.returncode == 0, proc.stderr + proc.stdout
     assert "referenced img assets all resolve" in proc.stdout
+
+
+def test_node_validator_rejects_dangling_media_in_a_later_term_bank(tmp_path):
+    if shutil.which("node") is None:
+        pytest.skip("node not available")
+    if not (ROOT / "node_modules" / "ajv").exists():
+        pytest.skip("node_modules not installed")
+
+    banks = _banks()
+    base = banks["term_bank"][0]
+    banks["term_bank"] = [copy.deepcopy(base) for _ in range(1_000)]
+    dangling = copy.deepcopy(base)
+    dangling[5][0]["content"][0]["content"].append({
+        "tag": "img",
+        "path": "missing-from-second-bank.png",
+        "width": 1,
+        "height": 1,
+        "sizeUnits": "em",
+        "alt": "missing test image",
+        "title": "missing test image",
+        "collapsible": False,
+        "collapsed": False,
+        "background": False,
+    })
+    banks["term_bank"].append(dangling)
+
+    zip_path = tmp_path / bk.ZIP_NAME
+    zip_path.write_bytes(
+        bk.build_zip(banks, "2026.09.01", manifest=_manifest("2026.09.01"))
+    )
+    proc = subprocess.run(
+        ["node", str(ROOT / "scripts" / "validate_yomitan.mjs"), str(zip_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode != 0
+    assert "dangling img asset reference: missing-from-second-bank.png" in proc.stderr

@@ -49,6 +49,8 @@ examples:
   text fallback) and source-marked phonetic families.
 - Accessible, compact CSS scoped to this dictionary's own markers; keyboard and
   screen-reader friendly.
+- Android-friendly term-bank sharding, with at most 1,000 ordered entries in
+  each `term_bank_N.json`, so constrained imports can advance bank by bank.
 - One self-updating canonical ZIP — no editions to choose between.
 
 ## Updating

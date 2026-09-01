@@ -161,9 +161,17 @@ def main():
     if chart_media.is_dir():
         shutil.copytree(chart_media, out_dir / "reading-frequency", dirs_exist_ok=True)
 
-    term_bank = json.loads((zip_dir / "term_bank_1.json").read_text(encoding="utf-8"))
+    bank_paths = sorted(
+        zip_dir.glob("term_bank_*.json"),
+        key=lambda path: int(path.stem.removeprefix("term_bank_")),
+    )
+    term_entries = [
+        entry
+        for path in bank_paths
+        for entry in json.loads(path.read_text(encoding="utf-8"))
+    ]
     styles_css = (zip_dir / "styles.css").read_text(encoding="utf-8")
-    by_char = {e[0]: e for e in term_bank}
+    by_char = {entry[0]: entry for entry in term_entries}
 
     # Preload bundled SVG assets so they can be inlined into the screenshots.
     embed = {}
