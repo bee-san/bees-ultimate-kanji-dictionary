@@ -39,9 +39,11 @@ examples:
 - Jiten meanings, on/kun readings, frequency ranks, and common vocabulary
   examples grouped by reading (On / Kun / Other), chosen by Jiten rank and
   rendered with furigana.
-- A compact **Frequency weight** pie with a visible percentage legend. The build
-  joins Jiten's downloadable Global `Word,Form,Rank` CSV to Jiten's kanji-reading
-  groups locally, so the daily release needs no per-word API crawl.
+- A compact **Frequency weight** pie with fit-checked reading labels inside its
+  slices and a visible percentage legend. Labels that cannot fit legibly remain
+  available in the legend. The build joins Jiten's downloadable Global
+  `Word,Form,Rank` CSV to Jiten's kanji-reading groups locally, so the daily
+  release needs no per-word API crawl.
 - **KANJIDIC2 fallback** for every character Jiten does not serve (English
   meanings, on/kun readings, stroke count, grade/JLPT), with no invented
   examples, ranks, or reading share.
@@ -128,6 +130,10 @@ validates the ZIP against the pinned official Yomitan schemas.
 ## Licences
 
 Generator code is MIT (see `LICENSE`).
+
+The generator includes a glyph-subset copy of **Droid Sans Japanese** © Google
+Corporation 2009 for rasterized reading labels. It is distributed under Apache
+License 2.0; see `LICENSE-reading-label-font.txt`.
 
 Dictionary **data** is redistributed under CC BY-SA 4.0:
 

@@ -43,14 +43,15 @@ def test_frequency_weight_contains_packaged_pie_with_compact_host_geometry():
     css = bk.STYLES_CSS
     wrapper_rule = css[css.index('[data-sc-bee-role="reading-pie"] .gloss-image-container'):]
     wrapper_rule = wrapper_rule[:wrapper_rule.index("}") + 1]
-    assert "width: 4.25em" in wrapper_rule
-    assert "max-width: 4.25em" in wrapper_rule
+    assert "width: 5.25em" in wrapper_rule
+    assert "max-width: 5.25em" in wrapper_rule
 
 
 def test_generated_chart_is_a_filled_pie_not_a_donut():
     png = bk.build_reading_frequency_png(rec("場.json"))
     image = Image.open(io.BytesIO(png)).convert("RGBA")
-    assert image.size == (128, 128)
+    assert image.size == (bk.READING_CHART_SIZE, bk.READING_CHART_SIZE)
+    assert image.width >= 192
     center = image.getpixel((image.width // 2, image.height // 2))
     assert center[3] == 255, "pie centre must be filled; a transparent centre is a donut"
     assert center[:3] != (255, 255, 255), "pie centre must be a data segment, not a white hole"

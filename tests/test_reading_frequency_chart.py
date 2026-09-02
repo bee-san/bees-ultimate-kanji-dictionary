@@ -81,6 +81,73 @@ def test_frequency_pie_is_a_valid_packaged_png():
         assert isinstance(centre, tuple) and centre[3] == 255
 
 
+def test_frequency_pie_prints_each_visible_reading_inside_its_slice():
+    record = _record()
+    record["reading_frequency_scores"] = [
+        {"reading": "せい", "score": 54.0, "reading_class": "On"},
+        {"reading": "い", "score": 11.0, "reading_class": "Kun"},
+        {"reading": "なま", "score": 9.0, "reading_class": "Kun"},
+        {"reading": "う", "score": 8.0, "reading_class": "Kun"},
+        {"reading": "お", "score": 7.0, "reading_class": "Kun"},
+        {"reading": "しょう", "score": 6.0, "reading_class": "On"},
+        {"reading": "き", "score": 5.0, "reading_class": "Kun"},
+    ]
+
+    distribution = bk.reading_frequency_distribution(record)
+    assert [segment["reading"] or "Other" for segment in distribution["segments"]] == [
+        "せい", "い", "なま", "う", "Other",
+    ]
+    assert bk._reading_pie_label(distribution["segments"][-1]) == "Other"
+    assert [segment["percent"] for segment in distribution["segments"]] == [54, 11, 9, 8, 18]
+
+    png = bk.build_reading_frequency_png(record)
+    with Image.open(io.BytesIO(png)).convert("RGBA") as image:
+        assert image.width >= 192 and image.height >= 192
+        label_colors = {(255, 255, 255), (24, 24, 24)}
+        center = image.width / 2
+        start = -90.0
+        for segment in distribution["segments"]:
+            sweep = segment["percent"] * 3.6
+            label_pixels = 0
+            for y in range(image.height):
+                for x in range(image.width):
+                    if image.getpixel((x, y))[:3] not in label_colors:
+                        continue
+                    angle = math.degrees(math.atan2(y + 0.5 - center, x + 0.5 - center))
+                    if (angle - start) % 360 < sweep:
+                        label_pixels += 1
+            assert label_pixels >= 8, segment
+            start += sweep
+
+
+def test_long_reading_labels_never_escape_the_pie():
+    segments = [
+        {"reading": "い", "percent": 85, "color": "#0072b2"},
+        {"reading": "いんのしょう", "percent": 14, "color": "#d55e00"},
+        {"reading": "うん", "percent": 1, "color": "#009e73"},
+    ]
+    png = bk._build_pie_png(segments)
+
+    with Image.open(io.BytesIO(png)).convert("RGBA") as image:
+        center = image.width / 2
+        pad = int(image.width * 0.06)
+        radius = (image.width - 2 * pad) / 2
+        label_colors = {(255, 255, 255), (24, 24, 24)}
+        escaped = []
+        for y in range(image.height):
+            for x in range(image.width):
+                pixel = image.getpixel((x, y))
+                assert isinstance(pixel, tuple)
+                if (
+                    pixel[:3] in label_colors
+                    and math.hypot(x + 0.5 - center, y + 0.5 - center)
+                        > radius + 0.5
+                ):
+                    escaped.append((x, y))
+
+    assert not escaped, "direct labels must remain entirely inside the pie"
+
+
 def test_normalization_ignores_untrusted_payload_frequency_scores():
     payload = {
         "character": "X",
@@ -131,7 +198,8 @@ def test_styles_keep_the_single_frequency_pie_compact_and_responsive():
     assert '[data-sc-bee-role="donut-caption"]' in css
     assert '[data-sc-bee-role="reading-pie"]' in css
     assert '[data-sc-bee-role="donut-legend"]' in css
-    assert "max-width: 4.25em" in css
+    assert "width: 5.25em" in css
+    assert "max-width: 5.25em" in css
     assert '[data-sc-bee-role="reading-mix"]' not in css
     assert '[data-sc-bee-role="reading-bar-segment"]' not in css
     assert "data-sc-bee-share" not in css

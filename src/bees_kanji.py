@@ -1064,6 +1064,8 @@ _DONUT_COLORS = [
     "#767676",  # grey ("Other" / overflow)
 ]
 _DONUT_OTHER_COLOR = "#767676"
+_PIE_LABEL_FILL = "#ffffff"
+_PIE_LABEL_STROKE = "#181818"
 
 
 def _largest_remainder_percents(counts, total):
@@ -1136,15 +1138,74 @@ def reading_frequency_distribution(record):
 # A raster image is what official Yomitan renders from an archive `path`, so it
 # survives every renderer / theme without relying on inline gradient support.
 
-# Fixed square canvas. 128px keeps the packaged bytes tiny while staying crisp
-# when the popup scales the image down to a few em.
-READING_CHART_SIZE = 128
+# Fixed square canvas. The extra resolution keeps the embedded reading labels
+# crisp when official Yomitan paints the packaged PNG onto a high-DPI canvas.
+READING_CHART_SIZE = 192
+READING_LABEL_MIN_PERCENT = 8
+READING_LABEL_FONT_PATH = (
+    pathlib.Path(__file__).with_name("assets") / "DroidSansJapanese-reading-labels.ttf"
+)
 
 
 def _hex_to_rgba(hex_color, alpha=255):
     """Convert a #rrggbb string to an (r, g, b, a) tuple."""
     h = hex_color.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+@functools.lru_cache(maxsize=None)
+def _reading_label_font(size, latin=False):
+    from PIL import ImageFont
+
+    if latin:
+        return ImageFont.load_default(size=size)
+    return ImageFont.truetype(str(READING_LABEL_FONT_PATH), size)
+
+
+def _reading_pie_label(segment):
+    if segment["percent"] < READING_LABEL_MIN_PERCENT:
+        return ""
+    return segment.get("reading") or "Other"
+
+
+def _reading_pie_label_size(label, percent):
+    size = {1: 28, 2: 24, 3: 21}.get(len(label), 18)
+    if percent < 12:
+        size -= 3
+    return max(13, size)
+
+
+def _pie_label_layout(draw, label, percent, start, sweep, center, radius, scale):
+    """Return a legible label placement wholly inside its pie segment."""
+    preferred_radial = 0.57 if percent >= 18 else 0.7
+    radial_candidates = [preferred_radial] + [
+        value / 100 for value in range(45, 81, 5)
+        if value / 100 != preferred_radial
+    ]
+    minimum_size = 13
+    for size in range(_reading_pie_label_size(label, percent), minimum_size - 1, -1):
+        font = _reading_label_font(size * scale, latin=label == "Other")
+        for radial in radial_candidates:
+            angle = math.radians(start + sweep / 2)
+            x = center + radius * radial * math.cos(angle)
+            y = center + radius * radial * math.sin(angle)
+            box = draw.textbbox(
+                (x, y), label, font=font, anchor="mm", stroke_width=scale
+            )
+            left, top, right, bottom = box
+            points = [
+                (left, top), (right, top), (left, bottom), (right, bottom),
+                ((left + right) / 2, top), ((left + right) / 2, bottom),
+                (left, (top + bottom) / 2), (right, (top + bottom) / 2),
+            ]
+            if all(
+                math.hypot(px - center, py - center) <= radius - 2 * scale
+                and (math.degrees(math.atan2(py - center, px - center)) - start) % 360
+                    <= sweep
+                for px, py in points
+            ):
+                return x, y, font
+    return None
 
 
 def reading_frequency_asset_name(character):
@@ -1161,7 +1222,7 @@ def build_reading_frequency_png(record):
 
 
 def _build_pie_png(segments):
-    """Draw one deterministic filled pie from prepared shared segments."""
+    """Draw one deterministic filled pie with direct reading labels."""
     from PIL import Image, ImageDraw
 
     scale = 4
@@ -1179,6 +1240,31 @@ def _build_pie_png(segments):
             draw.pieslice(box, start, end, fill=_hex_to_rgba(segment["color"]))
         start = end
 
+    center = size / 2
+    radius = (size - 2 * pad) / 2
+    start = -90.0
+    for segment in segments:
+        sweep = segment["percent"] * 3.6
+        end = start + sweep
+        label = _reading_pie_label(segment)
+        if label:
+            layout = _pie_label_layout(
+                draw, label, segment["percent"], start, sweep,
+                center, radius, scale,
+            )
+            if layout is not None:
+                x, y, font = layout
+                draw.text(
+                    (x, y),
+                    label,
+                    font=font,
+                    anchor="mm",
+                    fill=_hex_to_rgba(_PIE_LABEL_FILL),
+                    stroke_width=scale,
+                    stroke_fill=_hex_to_rgba(_PIE_LABEL_STROKE),
+                )
+        start = end
+
     img = img.resize((READING_CHART_SIZE, READING_CHART_SIZE), Image.LANCZOS)
     return _flatten_to_palette_png(img)
 
@@ -1187,15 +1273,16 @@ def _flatten_to_palette_png(rgba):
     """Flatten an RGBA pie to a deterministic fixed-palette PNG (bytes).
 
     Palette index 0 is the transparent field; the remaining indices are the
-    fixed Okabe-Ito segment colours (see ``_DONUT_COLORS``). Every opaque pixel
-    is snapped to its nearest segment colour; pixels below 50%% alpha become the
-    transparent index. The palette order is fixed, so identical inputs yield
-    byte-identical output.
+    fixed Okabe-Ito segment colours (see ``_DONUT_COLORS``), followed by the
+    two direct-label colours. Every opaque pixel is snapped to its nearest
+    palette colour; pixels below 50%% alpha become the transparent index. The
+    palette order is fixed, so identical inputs yield byte-identical output.
     """
     from PIL import Image
 
+    palette_colors = [*_DONUT_COLORS, _PIE_LABEL_FILL, _PIE_LABEL_STROKE]
     palette_rgb = [(0, 0, 0)] + [
-        (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in _DONUT_COLORS
+        (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16)) for h in palette_colors
     ]
     solids = palette_rgb[1:]
 
@@ -1275,8 +1362,8 @@ def build_reading_frequency_node(record):
                     "tag": "img",
                     "data": {"beeRole": "reading-chart"},
                     "path": reading_frequency_asset_name(record["character"]),
-                    "width": 4.25,
-                    "height": 4.25,
+                    "width": 5.25,
+                    "height": 5.25,
                     "sizeUnits": "em",
                     "alt": alt,
                     "title": alt,
@@ -2254,8 +2341,8 @@ STYLES_CSS = """\
   vertical-align: middle;
 }
 [data-sc-bee-role="reading-pie"] .gloss-image-container {
-  width: 4.25em;
-  max-width: 4.25em;
+  width: 5.25em;
+  max-width: 5.25em;
   vertical-align: middle;
 }
 [data-sc-bee-role="donut-legend"] {

@@ -100,6 +100,11 @@ def test_required_licence_and_attribution_notices_present():
     assert "edrdg.org" in README  # EDRDG licence link
     assert "LICENSE-data.txt" in README
     assert "LICENSE-kanjivg.txt" in README
+    assert "Droid Sans Japanese" in README
+    assert "Apache\nLicense 2.0" in README
+    font_licence = (ROOT / "LICENSE-reading-label-font.txt").read_text(encoding="utf-8")
+    assert "Apache License" in font_licence
+    assert "Version 2.0" in font_licence
 
 
 def test_frequency_weight_is_documented_concisely_and_honestly():

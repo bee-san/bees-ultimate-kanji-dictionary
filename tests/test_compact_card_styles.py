@@ -44,8 +44,8 @@ def test_chart_image_is_bounded_via_preserved_wrappers():
     assert selector in CSS, \
         "chart size must target the preserved .gloss-image-container wrapper"
     graphic = _rule(selector)
-    assert "width: 4.25em" in graphic
-    assert "max-width: 4.25em" in graphic
+    assert "width: 5.25em" in graphic
+    assert "max-width: 5.25em" in graphic
 
 
 def test_no_dead_image_data_attribute_selectors():
