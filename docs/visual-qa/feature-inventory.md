@@ -11,7 +11,8 @@ digests, and `SHA256SUMS` during publication.
 **Updater index:** https://raw.githubusercontent.com/bee-san/bees-ultimate-kanji-dictionary/main/dist/index.json
 
 **Official Yomitan tested:** Yomitan Popup Dictionary **26.7.29.0** (unpacked
-official build), fresh/clean persistent profile, exact release ZIP imported.
+official build), fresh/clean persistent profile, exact commit `0c65652` build
+imported.
 **Import result:** 1 dictionary installed; `12,633` canonical records plus one
 compatibility alias produce `12,634` term entries, with one canonical rich card
 as the sole visible result.
@@ -21,17 +22,17 @@ capture set:
 
 | Capture | Viewport | SHA-256 |
 | :--- | :--- | :--- |
-| `sei-compact-light.png` | 1280×900 light | `4d9437af030ca0c6cc340fb8ff678b9efbf4f427c97371801891c0dd07816bac` |
-| `sei-expanded-light.png` | 1280×900 light | `94d829f3cae333709697c21ebfe7d249310685fe858ed4268ea33cc6bc6a77d8` |
-| `ba-narrow-expanded.png` | 380×820 light | `751a899c30034b1c6672fe436595784353a02e3ee72f2534fa0f64568753caa9` |
+| `sei-compact-light.png` | 380×820 light @ 3× (1140×2460) | `b139e090885179be31d3afe789732331e42b4ca63466991abf4372c2d3092b30` |
+| `sei-expanded-light.png` | 520×880 light @ 3× (1560×2640) | `b44df5efb7e79f8b6d76b40dcee93dc9cc29c27d2ce98a1dabadc4ddc41bcf23` |
+| `ba-narrow-expanded.png` | 380×820 light @ 3× (1140×2460) | `7cf1c639151c2eb85b3ba7602efe192a257e0f339007266e9dbaa8db2e068317` |
 
 > **Visual method note.** The capture report records the imported ZIP path,
 > SHA-256 before and after QA, Yomitan extension ID/version, viewport, DOM
-> geometry, body text, and screenshot SHA-256. Independent pixel analysis then
-> matches every expected packaged pie colour in the rendered Yomitan canvas and
-> checks visible non-background pixels. The exact-final candidate used for these
-> pinned images was revision `2026.08.19.2`, ZIP SHA-256
-> `e7a75ebdbb8125c71bfda98e3050ba38b00749252e0832a9cc5566a64a260341`;
+> geometry, body text, and screenshot SHA-256. Independent visual inspection
+> confirms the fit-checked readings inside their owning slices, the complete
+> legends, and undamaged Japanese glyphs. The exact candidate used for these
+> pinned images was revision `2026.08.19.99`, ZIP SHA-256
+> `d3ef0122ea37b3fc50b8d3485f848a2749499b296e5c9b6b5fe8e07ff0fa4019`;
 > post-publication QA must import the downloaded public bytes and reproduce or
 > deliberately refresh this evidence. All captures are unmodified, unmocked,
 > unannotated official-Yomitan renders, not generated HTML previews.
@@ -61,8 +62,8 @@ media, and fallback states live in the release QA evidence.
 | 4 | Meanings | 生 → “life; genuine; birth” | Compact text line, no raw JSON | **PASS** | `sei-compact-light.png` |
 | 5 | Rank / Grade / JLPT / strokes | 生 | Real-text badges inside “Details”; only known fields shown | **PASS** | host report |
 | 6 | **Frequency weight pie** | 生 / 場 | Exactly one compact filled pie, left of its visible legend | **PASS** | all three README captures + pixel report |
-| 7 | Top four + Other | 生 | せい 54%; い 11%; なま 9%; う 8%; Other 18% | **PASS** | both 生 captures |
-| 8 | Narrow chart geometry | 場 @ 380 px | ば 61%; じょう 39%; pie remains left of legend with no overlap/overflow | **PASS** | `ba-narrow-expanded.png` |
+| 7 | Top four + Other | 生 | せい 54%; い 11%; なま 9%; う 8%; Other 18%, all fit visibly inside their slices | **PASS** | both 生 captures |
+| 8 | Narrow chart geometry | 場 @ 380 px | ば 61%; じょう 39%; both labels stay inside the pie left of its legend with no overlap/overflow | **PASS** | `ba-narrow-expanded.png` |
 | 9 | Ruby vocabulary | 場 / 生 | Clickable ruby surfaces and concise glosses | **PASS** | all three README captures |
 | 10 | KanjiVG learning aids | 場 / 生 | Static numbered diagram, at least 80 CSS px, with text fallback | **PASS** | host + painted-pixel report |
 | 11 | Progressive disclosure | 場 / 生 | Keyboard-openable native `<summary>` sections; no empty section | **PASS** | expanded captures + host report |
@@ -91,7 +92,8 @@ media, and fallback states live in the release QA evidence.
 ## Verdict
 
 **PASS.** The pinned README images visibly show the new **FREQUENCY WEIGHT**
-filled pie—not the stale **READING DISTRIBUTION** entry-count chart. Official
+filled pie with readings inside its slices—not the stale **READING DISTRIBUTION**
+entry-count chart. Official
 Yomitan renders the pie left of its legend at 380 px in light and
  dark/reduced-motion modes, with no overlap or horizontal clipping. The residual
 semantic boundary is explicit: this is a conservative, CSV-only transform of

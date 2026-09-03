@@ -10,9 +10,10 @@ coverage and [KanjiVG](https://kanjivg.tagaini.net/) learning aids.
 
 ## Screenshots
 
-These are genuine, unmodified screenshots of the dictionary imported from the
-canonical release ZIP into the **official Yomitan** extension (Yomitan Popup
-Dictionary 26.7.29.0) — real Yomitan search results, not generated previews.
+The three hero images are genuine, unmodified native-3× screenshots of the exact
+dictionary build at commit `0c65652`, imported into the **official Yomitan**
+extension (Yomitan Popup Dictionary 26.7.29.0) — real Yomitan search results,
+not generated previews.
 場 and 生 are fully enriched Jiten entries; a KANJIDIC2-only fallback character
 renders a plainer card with just readings, meanings, and stroke data. A
 full visual acceptance inventory lives in
@@ -20,7 +21,7 @@ full visual acceptance inventory lives in
 
 | Enriched entry (生) | Expanded details (生) | Narrow entry (場) |
 | :---: | :---: | :---: |
-| ![Real Yomitan search result for the kanji 生, showing the keyword "life", top reading chips, meanings, the coloured Frequency weight pie with its percentage legend, and common vocabulary.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry with its complete On and Kun readings expanded below the visible Frequency weight pie.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 380px official-Yomitan viewport, showing a compact Frequency weight pie to the left of its legend above vocabulary, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
+| ![Real Yomitan search result for 生, showing the keyword "life", top reading chips, meanings, and a Frequency weight pie labelled inside its slices with せい, い, なま, う, and Other beside the complete percentage legend.](docs/images/real-yomitan/sei-compact-light.png) | ![The same 生 entry and labelled Frequency weight pie with its complete On and Kun readings expanded below.](docs/images/real-yomitan/sei-expanded-light.png) | ![The 場 entry in a narrow 380px official-Yomitan viewport, showing a compact Frequency weight pie labelled ば and じょう inside its slices to the left of the legend, with disclosures wrapping cleanly without clipping.](docs/images/real-yomitan/ba-narrow-expanded.png) |
 
 The KANJIDIC2 fallback is deliberately plain — no invented pie chart, ranks, or
 examples:
