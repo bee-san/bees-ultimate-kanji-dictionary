@@ -51,6 +51,34 @@ def test_frequency_distribution_keeps_its_four_largest_readings():
     assert distribution["collapsed"] is True
 
 
+def test_frequency_distribution_drops_readings_that_round_to_zero_percent():
+    """A reading whose rank-weight share rounds to 0% carries no visual
+    information: it must not appear as a 0% legend row or a zero-width painted
+    slice. Surviving segments still sum to exactly 100."""
+    record = _record()
+    # Two dominant readings plus one negligible-weight reading (rounds to 0%).
+    record["reading_frequency_scores"] = [
+        {"reading": "ば", "score": 69.0, "reading_class": "On"},
+        {"reading": "じょう", "score": 31.0, "reading_class": "On"},
+        {"reading": "えき", "score": 0.2, "reading_class": "On"},
+    ]
+    distribution = bk.reading_frequency_distribution(record)
+
+    percents = [segment["percent"] for segment in distribution["segments"]]
+    readings = [segment["reading"] or "Other" for segment in distribution["segments"]]
+    assert 0 not in percents, "no segment may round to 0%"
+    assert "えき" not in readings, "a 0%-rounding reading must be dropped"
+    assert readings == ["ば", "じょう"]
+    assert percents == [69, 31]
+    assert sum(percents) == 100
+
+    # The rendered node/legend must not carry a 0% row either.
+    node = bk.build_reading_frequency_node(record)
+    blob = json.dumps(node, ensure_ascii=False)
+    assert ": 0%" not in blob
+    assert "えき" not in blob
+
+
 def test_frequency_node_has_one_pie_and_one_simple_legend():
     node = bk.build_reading_frequency_node(_record())
     blob = json.dumps(node, ensure_ascii=False)

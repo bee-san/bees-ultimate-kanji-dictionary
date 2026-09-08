@@ -1120,6 +1120,12 @@ def reading_frequency_distribution(record):
     percents = _largest_remainder_percents(values, total)
     segments = []
     for index, (reading, percent) in enumerate(zip(labels, percents)):
+        # A reading whose rank-weight share rounds to 0% carries no visual
+        # information; drop it so it never becomes a 0% legend row or a
+        # zero-width painted slice. Dropping a 0 leaves the surviving integer
+        # percents summing to exactly 100.
+        if percent == 0:
+            continue
         is_other = reading == ""
         segments.append({
             "reading": reading,
