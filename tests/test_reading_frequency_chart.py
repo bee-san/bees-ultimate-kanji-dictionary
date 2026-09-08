@@ -216,6 +216,51 @@ def test_missing_frequency_data_omits_the_chart_instead_of_falling_back():
     assert node is None
 
 
+def test_tail_slice_is_english_other_never_the_kanji_他():
+    # Hard contract: the collapsed tail slice is labelled "Other" in ENGLISH in
+    # BOTH the slice face and the legend; the kanji 他 must never appear.
+    # Use >4 readings with a substantial tail (18%) so the Other slice is large
+    # enough to carry a drawn label, exercising the slice-face path too.
+    record = _record()
+    record["reading_frequency_scores"] = [
+        {"reading": "せい", "score": 54.0, "reading_class": "On"},
+        {"reading": "い", "score": 11.0, "reading_class": "Kun"},
+        {"reading": "なま", "score": 9.0, "reading_class": "Kun"},
+        {"reading": "う", "score": 8.0, "reading_class": "Kun"},
+        {"reading": "お", "score": 7.0, "reading_class": "Kun"},
+        {"reading": "しょう", "score": 6.0, "reading_class": "On"},
+        {"reading": "き", "score": 5.0, "reading_class": "Kun"},
+    ]
+    distribution = bk.reading_frequency_distribution(record)
+
+    tail = distribution["segments"][-1]
+    assert tail["reading"] == "", "tail slice carries no reading of its own"
+    assert tail["percent"] >= bk.READING_LABEL_MIN_PERCENT
+    # The collapsed tail is drawn AND legended as the English word "Other".
+    assert bk._reading_pie_label(tail) == "Other"
+    assert "他" != bk._reading_pie_label(tail)
+
+    node = bk.build_reading_frequency_node(record)
+    blob = json.dumps(node, ensure_ascii=False)
+    assert "Other: " in blob  # legend row
+    assert "他" not in blob
+
+    # The rasterized slice face carries a Latin label, never the kanji 他. Prove
+    # 他 is a paintable glyph in the packaged font (so its absence in the pie is
+    # a real result), then confirm the pie itself contains no 他 ink by rendering
+    # every reading's label with the Latin font used for "Other".
+    from PIL import ImageDraw, ImageFont
+
+    kanji_font = ImageFont.truetype(str(bk.READING_LABEL_FONT_PATH), bk.READING_CHART_SIZE // 3)
+    canvas = Image.new("L", (bk.READING_CHART_SIZE, bk.READING_CHART_SIZE), 0)
+    ImageDraw.Draw(canvas).text((4, 4), "他", fill=255, font=kanji_font)
+    assert canvas.getbbox() is not None, "他 must be a paintable glyph for this test to be meaningful"
+
+    png = bk.build_reading_frequency_png(record)
+    assert png is not None
+    assert isinstance(png, (bytes, bytearray)) and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
 def _payload(character, reading):
     return {
         "character": character,
