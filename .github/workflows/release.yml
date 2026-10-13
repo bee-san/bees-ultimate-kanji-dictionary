@@ -2,7 +2,7 @@ name: release
 
 on:
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 1 * *" # monthly, 1st at 03:17 UTC (was daily)
   workflow_dispatch: {}
 
 permissions:
@@ -355,7 +355,7 @@ jobs:
         run: |
           release_tag="v$REVISION"
           cat > RELEASE_NOTES.md <<'EOF'
-          Daily immutable dictionary release. Frequency weight is a documented,
+          Monthly immutable dictionary release. Frequency weight is a documented,
           rank-derived matched-form metric, not observed occurrence probability.
           Verify every retained source and derived asset with SHA256SUMS and
           MANIFEST.json before use.
