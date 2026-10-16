@@ -42,8 +42,8 @@ def test_build_environment_and_dependencies_are_exactly_locked():
     assert "PYTHONPATH: src" in workflow
     assert "npm ci" in workflow
     assert "npm audit --omit=dev" in workflow
-    assert package["dependencies"]["adm-zip"] == "0.6.0"
-    assert package_lock["packages"]["node_modules/adm-zip"]["version"] == "0.6.0"
+    assert package["dependencies"]["adm-zip"] == "0.6.1"
+    assert package_lock["packages"]["node_modules/adm-zip"]["version"] == "0.6.1"
     assert '"jsonschema==4.26.0"' in pyproject
     assert '"Pillow==12.3.0"' in pyproject
     assert '"pytest==9.1.1"' in pyproject
