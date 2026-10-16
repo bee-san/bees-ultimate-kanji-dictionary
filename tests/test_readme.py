@@ -57,15 +57,15 @@ def test_frequency_weight_hero_strip_is_the_exact_final_yomitan_capture_set():
     expected = {
         "docs/images/real-yomitan/sei-compact-light.png": (
             (1140, 2460),
-            "b139e090885179be31d3afe789732331e42b4ca63466991abf4372c2d3092b30",
+            "483987728d32aee4b52c12c328f32deb4adb8c6ed3a94cdefb06c00b4a8b4a7c",
         ),
         "docs/images/real-yomitan/sei-expanded-light.png": (
             (1560, 2640),
-            "b44df5efb7e79f8b6d76b40dcee93dc9cc29c27d2ce98a1dabadc4ddc41bcf23",
+            "2542693c330a46bb83a2ca6028861e38a0b4d6630467718f9a35cfc6b8ee30ca",
         ),
         "docs/images/real-yomitan/ba-narrow-expanded.png": (
             (1140, 2460),
-            "7cf1c639151c2eb85b3ba7602efe192a257e0f339007266e9dbaa8db2e068317",
+            "0bcb12a61074ec8fe4d7c5f46bcd152d7788833cde9c22270403d5ff7bff14eb",
         ),
     }
     for relative, (size, digest) in expected.items():
