@@ -83,6 +83,9 @@ re-downloads the canonical ZIP without disturbing your other dictionaries.
   pie chart. With no kanji dictionary shipped, that secondary drilldown simply
   reports "no results"; the full rich card is always delivered through the
   ordinary term lookup instead.
+- **Character ranks stay separate from word frequencies.** Ranks ship in
+  `kanji_meta_bank`, so a word spelled with one kanji keeps its own word rank
+  and word-frequency average. The rich kanji card still shows its **Rank** badge.
 - **No audio and no pitch accent.**
 - **Source freshness is once per UTC day.** Jiten's kanji data and bulk Global
   frequency CSV, KANJIDIC2, and KanjiVG are fetched at most once daily; a release

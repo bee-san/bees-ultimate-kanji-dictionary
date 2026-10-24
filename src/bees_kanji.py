@@ -2420,19 +2420,13 @@ STYLES_CSS = """\
 }
 """
 
-# Only the structured single-character TERM banks ship. The native
-# kanji_bank/kanji_meta_bank are deliberately NOT packaged: Yomitan's
-# kanji-click / "view kanji" flow routes exclusively to the native kanji
-# renderer (a fixed Meaning/Readings table dictionary CSS cannot restyle), so a
-# shipped kanji_bank silently supersedes the rich structured card on the user's
-# ordinary lookup path. Dropping it makes the structured term entry the single
-# canonical visible surface for every character (verified against real Yomitan
-# 26.7.29.0 in parent task t_08284e0e). build_banks still produces the kanji
-# banks in-memory for unit coverage, but this table is the shipped/hashed set,
-# so nothing reintroduces a competing flat entry.
+# Rich term entries are the canonical character surface. Do not ship a native
+# kanji_bank that would replace them with Yomitan's fixed kanji renderer.
+# Character ranks belong in kanji_meta_bank: metadata alone adds no native
+# card, and unlike term_meta_bank it cannot affect word-frequency averages.
 BANK_FILES = [
     ("term_bank_1.json", "term_bank"),
-    ("term_meta_bank_1.json", "term_meta_bank"),
+    ("kanji_meta_bank_1.json", "kanji_meta_bank"),
 ]
 
 # Keep each structured term bank small enough for constrained Android/Firefox

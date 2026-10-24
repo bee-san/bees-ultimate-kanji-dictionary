@@ -1,28 +1,8 @@
-"""RED/GREEN: the structured single-character term entry is the ONE canonical surface.
+"""Ship one rich term surface and keep character ranks in kanji metadata.
 
-Real-Yomitan reproduction (parent task t_08284e0e) proved the shipped package
-carried BOTH a rich structured term entry AND a native ``kanji_bank`` entry for
-the same character. Yomitan's kanji-click / "view kanji" flow routes
-*exclusively* to the native kanji renderer (a fixed Meaning/Readings table that
-dictionary CSS cannot restyle), so a user who clicked a headword kanji landed on
-the flat card and never saw the reading-distribution donut.
-
-The smallest robust fix is to stop packaging the competing native banks. These
-tests lock that contract: the built ZIP must contain the term banks (+ media +
-licences + manifest + styles) and MUST NOT contain ``kanji_bank_1.json`` or
-``kanji_meta_bank_1.json``.
-
-Verified selection contract (official Yomitan 26.7.29.0, real import, see
-/tmp/verify): the ORDINARY lookup path -- scanning/hovering a character in text,
-or typing it in the search box -- is a TERM lookup, and every single character
-resolves to our one structured term entry, so the rich donut card is exactly
-what the reader sees on the canonical path. The secondary ``type=kanji``
-drilldown reached only by explicitly clicking a headword-kanji link now returns
-Yomitan's built-in "No results found" instead of a competing flat card: with no
-native kanji dictionary shipped there is deliberately nothing to route it to.
-That is the documented, supported selection -- we ship a single canonical
-character surface (the rich term card) and no flat kanji surface -- not a
-regression, because the reader's ordinary lookup already delivers the full card.
+A kanji_meta_bank contains metadata, not a competing native kanji card. It must
+not be confused with the kanji_bank that would replace the rich term surface.
+Character ranks must never enter term metadata or change word-frequency averages.
 """
 import io
 import json
@@ -49,33 +29,38 @@ def _zip_names(revision="2026.08.16"):
         return set(zf.namelist())
 
 
-def test_built_zip_excludes_native_kanji_banks():
+def test_built_zip_excludes_native_kanji_entries():
     names = _zip_names()
     assert "kanji_bank_1.json" not in names, (
         "native kanji_bank must not ship: the kanji-click flow routes to the "
         "unstyleable native renderer and hides the rich structured card"
     )
-    assert "kanji_meta_bank_1.json" not in names
+    assert "kanji_meta_bank_1.json" in names
 
 
 def test_built_zip_keeps_the_structured_term_surface():
     names = _zip_names()
-    # The canonical rich card lives in the term bank; term meta carries ranks.
+    # The canonical rich card lives in the term bank; only kanji meta carries ranks.
     assert "term_bank_1.json" in names
-    assert "term_meta_bank_1.json" in names
+    assert "term_meta_bank_1.json" not in names
     assert "index.json" in names
     assert "styles.css" in names
     assert "LICENSE-data.txt" in names
 
 
-def test_shipped_bank_files_table_carries_only_term_banks():
-    """The shipped-bank manifest (drives both build_zip and content_hash) must
-    no longer reference the native kanji banks, so nothing can reintroduce a
-    competing flat surface or re-add it to the deterministic content hash."""
+def test_shipped_bank_files_table_separates_kanji_ranks_from_word_metadata():
     shipped = {name for _, name in bk.BANK_FILES}
-    assert "kanji_bank" not in shipped
-    assert "kanji_meta_bank" not in shipped
-    assert shipped == {"term_bank", "term_meta_bank"}
+    assert shipped == {"term_bank", "kanji_meta_bank"}
+
+
+def test_shipped_kanji_ranks_match_the_rich_card_without_word_frequency_rows():
+    banks = _banks()
+    with zipfile.ZipFile(io.BytesIO(bk.build_zip(banks, revision="2026.10.24"))) as zf:
+        assert not any(name.startswith("term_meta_bank_") for name in zf.namelist())
+        ranks = json.loads(zf.read("kanji_meta_bank_1.json"))
+    assert ranks == banks["kanji_meta_bank"]
+    assert ["場", "freq", 57] in ranks
+    assert all(row[0] != "髙" for row in ranks), "aliases have no invented rank"
 
 
 def test_every_shipped_character_has_exactly_one_structured_term_entry():
