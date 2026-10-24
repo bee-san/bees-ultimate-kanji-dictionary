@@ -105,13 +105,13 @@ def test_zip_members_at_root_with_expected_names():
     expected = {
         "index.json",
         "term_bank_1.json",
-        "term_meta_bank_1.json",
+        "kanji_meta_bank_1.json",
         "styles.css",
         "LICENSE-data.txt",
     }
     assert set(names) == expected
     assert "kanji_bank_1.json" not in names
-    assert "kanji_meta_bank_1.json" not in names
+    assert "term_meta_bank_1.json" not in names
     for n in names:
         assert "/" not in n  # all at ZIP root, no subfolders
 

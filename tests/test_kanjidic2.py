@@ -166,5 +166,5 @@ def test_merged_build_materially_exceeds_jiten_and_stays_valid():
     # The native kanji bank is deliberately not shipped; the structured term
     # bank is the single canonical surface and carries every merged character.
     assert "kanji_bank_1.json" not in names
-    assert "kanji_meta_bank_1.json" not in names
+    assert "kanji_meta_bank_1.json" in names
     assert len(tb) == 3
